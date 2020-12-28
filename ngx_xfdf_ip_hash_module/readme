@@ -1,0 +1,17 @@
+功能：
+使用客户端 $x-forwarded-for首ip即是客户端最初ip做为 upstream ip hash，这样能够比较均匀的负载客户访问并贴住ip．
+原本默认的 ip_hash是使用 $remote_addr做ip hash，这样在多一级代理的情况下做负载运算的ip永远只有一个，就是不能做负载了．
+另外使用 hash 指令指定 参数$x-forwarded-for 可以实现多级代理后负载，但$x-forwarded-for可能会比较长影响hash效率，再有中间路由的变化会使hash值计算变化，不能很好的达到贴住ip的效果
+
+使用：
+upstream store {
+    server 192.168.7.105:8082 weight=2 max_fails=3 fail_timeout=5s;
+    server 192.168.7.205:8085 weight=2 max_fails=3 fail_timeout=5s;
+    xfdf_ip_hash 3; #同ip_hash.取值从1到4，重值率降低
+}
+
+upstream store {
+    server 192.168.7.105:8082 weight=2 max_fails=3 fail_timeout=5s;
+    server 192.168.7.205:8085 weight=2 max_fails=3 fail_timeout=5s;
+    xfdf_ip_hash consistent; #固化hash，当节点变化尽量不变更ip负载
+}

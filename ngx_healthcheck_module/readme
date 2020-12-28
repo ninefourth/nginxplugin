@@ -1,0 +1,26 @@
+功能：upstream中检测后端服务器状态，如果有问题则自动切掉．
+说明：
+  当后端服务处于假死状态时，普通的配置只能通过超时设置返回客户端，而不能对新的访问限流到此服务器．使用本配置可以临检后端服务如果出现假死或不可达的情况则自动切掉问题服务器直到可以正常访问为止．
+  网络上有其它人写的程序，但有对nginx本身代码的侵入，所以做的改造并结合ngx_xfdf_ip_hash_module使用
+  upstream store1 {
+        server 192.168.7.105:8082 weight=2 max_fails=3 fail_timeout=5s;
+        server 192.168.7.205:8085 weight=2 max_fails=3 fail_timeout=5s;
+
+        xfdf_ip_hash 3;
+        check interval=3000 rise=3 fall=3 timeout=10000 default_down=false type=http;  
+        check_http_send "GET /store/v1/storebill?billid=1 HTTP/1.0\r\n\r\n"; 
+        check_http_expect_alive http_2xx http_3xx http_4xx;  #
+    }
+    #[check] 
+    interval:每3秒检测
+    rise:若成功3次则认为服务器有效
+    fall:若失败3次则认为服务器无效
+    timeout:探测后端服务器若超过10秒则认为失败一次
+    default_down:默认服务初始是有效状态
+    type:使用http做为探测后端服务器的方法
+    
+    #[check_http_send] 当check中type=http
+     "GET /store/v1/storebill?billid=1 HTTP/1.0\r\n\r\n" 表示向后端服务器探活的地址
+     
+     #[check_http_expect_alive]
+     http_2xx http_3xx http_4xx 　表示当探活地址响应码返回2xx 3xx 4xx时服务器有效

@@ -1,1 +1,31 @@
 功能：
+这是一个对nginx做的端点模块，用于对外暴露restful，方便外部程序在不重启nginx的情况下干预nginx的行为(通过其它模块，而不是在本模块内做处理，本模块只是提供端点和调用其它功能模块)
+
+做如下配置，使端点对外暴露
+server {
+        listen 8100;
+        server_name 192.168.7.233 127.0.0.1;
+        location / {
+            endpoint;
+        }
+    }
+
+目前完成的功能
+一. 动态摘挂upstream的server，注意必须在配置文件的upstream中使用 xfdf_ip_hash(ngx_xfdf_ip_hash_module)
+#列出所有upstream
+http://192.168.7.233:8100/list
+    upstream store {
+     server 192.168.7.105:8082 name=0 down=0
+     server 192.168.7.205:8085 name=1 down=0
+    }
+    upstream store1 {
+     server 192.168.7.105:8082 name=0 down=0
+     server 192.168.7.205:8085 name=1 down=0
+    }
+返回结果里，name是唯一名称，摘挂server使用此值；down表示server的状态
+
+#摘掉server /down/{upstream_name}/{server_name}
+http://192.168.7.233:8100/down/store1/0
+
+#挂载server /up/{upstream_name}/{server_name}
+http://192.168.7.233:8100/up/store1/0

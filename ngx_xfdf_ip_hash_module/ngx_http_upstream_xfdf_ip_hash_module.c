@@ -524,7 +524,6 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
         }
 
         ngx_log_debug2(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get ip hash peer, hash: %ui %04XL", p, (uint64_t) m);
-
         //如果宕机重新选择
         if (peer->down) {
             goto next;
@@ -533,9 +532,11 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
         #if (NGX_HTTP_UPSTREAM_CHECK)
         ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get hash peer, check peer down ");
         if (ngx_http_upstream_check_peer_force_down(peer)) {
+            ngx_log_error(NGX_LOG_ERR, pc->log, 0, "xfdf - ip hash peer [%V] is force-down", &peer->server);
             goto next;
         }
         if (ngx_http_upstream_check_peer_down(peer)) {
+            ngx_log_error(NGX_LOG_ERR, pc->log, 0, "xfdf - ip hash peer [%V] is check-down", &peer->server);
             goto next;
         }
         #endif
@@ -716,9 +717,11 @@ ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data)
         #if (NGX_HTTP_UPSTREAM_CHECK)
         ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get hash peer, check peer down ");
         if (ngx_http_upstream_check_peer_force_down(peer)) {
+            ngx_log_error(NGX_LOG_ERR, pc->log, 0,"xfdf - hash peer [%V] is force-down ", &peer->server);
             goto next;
         }
         if (ngx_http_upstream_check_peer_down(peer)) {
+            ngx_log_error(NGX_LOG_ERR, pc->log, 0,"xfdf - hash peer [%V] is check-down ", &peer->server);
             goto next;
         }
         #endif
@@ -1043,9 +1046,11 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
             #if (NGX_HTTP_UPSTREAM_CHECK)
             ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - consistent hash peer, check peer down ");
             if (ngx_http_upstream_check_peer_force_down(peer)) {
+                ngx_log_error(NGX_LOG_ERR, pc->log, 0,"xfdf - consistent peer [%V] is force-down ", &peer->server);
                 continue;
             }
             if (ngx_http_upstream_check_peer_down(peer)) {
+                ngx_log_error(NGX_LOG_ERR, pc->log, 0,"xfdf - consistent peer [%V] is check-down ", &peer->server);
                 continue;
             }
             #endif

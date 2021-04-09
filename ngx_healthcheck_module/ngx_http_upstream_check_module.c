@@ -89,8 +89,14 @@ typedef struct {
     ngx_atomic_t                             down;
 
     u_char                                   padding[64];
-    //by zgk , force the server down, it is invalid for check
+    //by zgk , force the server down, it is invalid for check , if ==1 only forcedown , if ==2 forcedown and output error log
     ngx_atomic_t                             force_down;
+    //by zgk , the weight of server
+    ngx_atomic_t                             weight;
+    //the varialty of weight of the peer
+    ngx_atomic_i_t                           v_weight;
+    //the varialty of total_weight,only in 1st peer of upstream
+    ngx_atomic_i_t                           v_total_weight;
 
 } ngx_http_upstream_check_peer_shm_t;
 
@@ -142,6 +148,9 @@ struct ngx_http_upstream_check_peer_s {
     ngx_http_upstream_check_srv_conf_t      *conf;
     //the real peer address
     ngx_http_upstream_rr_peer_t             *peer_mem_addr;
+    //init weight of peer
+    ngx_uint_t                              weight;
+
 };
 
 
@@ -818,6 +827,7 @@ ngx_http_upstream_check_add_peer(ngx_conf_t *cf,
     peer->upstream_name = &us->host;
     peer->peer_addr->sockaddr = pr->sockaddr;
     peer->peer_addr->socklen = pr->socklen;
+    peer->weight = pr->weight;
 //    ngx_memcpy(&peer->peer_addr->name.data,pr->name.data, pr->name.len);
 //    peer->peer_addr->name.len=pr->name.len;
     peer->peer_addr->name.len=pr->name.len;
@@ -931,6 +941,59 @@ ngx_http_upstream_check_addr_change_port(ngx_pool_t *pool, ngx_addr_t *dst,
     return NGX_OK;
 }
 
+void ngx_http_upstream_check_set_peer_weight(void *fstp ,void *p, ngx_uint_t w)
+{
+    ngx_http_upstream_check_peer_t  *peer;
+    ngx_http_upstream_check_peer_t  *fstpeer;
+    ngx_http_upstream_rr_peer_t     *memp;
+
+    memp = (ngx_http_upstream_rr_peer_t*)p;
+
+    peer = ngx_http_upstream_check_get_peer_by_peer(p);
+    fstpeer = ngx_http_upstream_check_get_peer_by_peer(fstp);
+
+    if ( peer == NULL ) {
+        return;
+    }
+
+    fstpeer->shm->v_total_weight = fstpeer->shm->v_total_weight - peer->shm->v_weight + w - memp->weight;
+    peer->shm->v_weight = w - memp->weight;
+
+	peer->shm->weight=w;
+}
+
+ngx_uint_t
+ngx_http_upstream_get_peer_weight(void *p)
+{
+    ngx_http_upstream_check_peer_t  *peer;
+
+    peer = ngx_http_upstream_check_get_peer_by_peer(p);
+
+    if ( peer == NULL ) {
+        return 0 ;
+    }
+
+    if(!peer->shm->weight)
+    {
+    	peer->shm->weight = peer->weight;
+    }
+
+    return (peer->shm->weight);
+}
+
+ngx_int_t
+ngx_http_upstream_get_v_total_weight(void *fstp)
+{
+    ngx_http_upstream_check_peer_t  *peer;
+
+    peer = ngx_http_upstream_check_get_peer_by_peer(fstp);
+
+    if ( peer == NULL ) {
+        return 0 ;
+    }
+
+    return (peer->shm->v_total_weight);
+}
 
 void ngx_http_upstream_check_force_down_peer(void *p, ngx_uint_t dw)
 {
@@ -4110,6 +4173,9 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
         psh->down         = opsh->down;
 
         psh->force_down   = opsh->force_down;
+        psh->weight   = opsh->weight;
+        psh->v_weight = opsh->v_weight;
+        psh->v_total_weight = opsh->v_total_weight;
 
     } else {
         psh->access_time  = 0;
@@ -4122,6 +4188,9 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
         psh->down         = init_down;
 
         psh->force_down   = 0;
+        psh->weight   = 0;
+        psh->v_weight = 0;
+        psh->v_total_weight = 0;
     }
 
 #if (NGX_HAVE_ATOMIC_OPS)

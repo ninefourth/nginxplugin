@@ -139,7 +139,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
         if (con != NULL) {
             buf = ngx_create_temp_buf(r->pool, con->len);
             if (buf != NULL) {
-                buf->last = ngx_sprintf(buf->last, "%V", con);
+                buf->last = ngx_sprintf(buf->last, "%V\n", con);
             }
         }
     } else if(value[0].len == 4 && ngx_strncasecmp(value[0].data, (u_char *)"down", 4) == 0) {
@@ -149,7 +149,18 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
             ngx_xfdf_deal_server(up,sr,1);
             buf = ngx_create_temp_buf(r->pool, sucs.len);
             if (buf != NULL) {
-                buf->last = ngx_sprintf(buf->last, "%V", &sucs);
+                buf->last = ngx_sprintf(buf->last, "%V\n", &sucs );
+            }
+        }
+        if( resource->nelts == 4  ) {
+            ngx_str_t *up = &value[1]; //upstream
+            ngx_str_t *sr = &value[2]; //server
+            if(ngx_strncasecmp(value[3].data, (u_char *)"log", 3) == 0) {
+                ngx_xfdf_deal_server(up,sr,2);
+                buf = ngx_create_temp_buf(r->pool, sucs.len);
+                if (buf != NULL) {
+                    buf->last = ngx_sprintf(buf->last, "%V\n", &sucs );
+                }
             }
         }
     } else if(value[0].len == 2 && ngx_strncasecmp(value[0].data, (u_char *)"up", 2) == 0) {
@@ -159,7 +170,19 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
             ngx_xfdf_deal_server(up,sr,0);
             buf = ngx_create_temp_buf(r->pool, sucs.len);
             if (buf != NULL) {
-                buf->last = ngx_sprintf(buf->last, "%V", &sucs);
+                buf->last = ngx_sprintf(buf->last, "%V\n", &sucs);
+            }
+        }
+    } else if(value[0].len == 6 && ngx_strncasecmp(value[0].data, (u_char *)"weight", 6) == 0) {
+        if( resource->nelts == 4  ){
+            ngx_str_t *up = &value[1]; //upstream
+            ngx_str_t *sr = &value[2]; //server
+            ngx_str_t *wt = &value[3]; //weight
+            ngx_uint_t w = ngx_atoi(wt->data, wt->len);
+            ngx_xfdf_deal_peer_weight(up,sr,w);
+            buf = ngx_create_temp_buf(r->pool, sucs.len);
+            if (buf != NULL) {
+                buf->last = ngx_sprintf(buf->last, "%V\n", &sucs);
             }
         }
     }

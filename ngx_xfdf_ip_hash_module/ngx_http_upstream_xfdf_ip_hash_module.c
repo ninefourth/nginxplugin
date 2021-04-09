@@ -98,6 +98,9 @@ ngx_http_upstream_chash_cmp_points(const void *one, const void *two);
 static ngx_int_t
 ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data);
 
+void *
+ngx_xfdf_deal_server_get_peer(ngx_http_upstream_rr_peer_t **fstp ,ngx_str_t *up , ngx_str_t *sr);
+
 //模块指令
 static ngx_command_t  ngx_http_upstream_xfdf_ip_hash_commands[] = {
 
@@ -152,6 +155,7 @@ static ngx_str_t str_up=ngx_string("upstream ");
 static ngx_str_t str_sr=ngx_string(" server ");
 static ngx_str_t str_dn=ngx_string(" down=");
 static ngx_str_t str_nm=ngx_string(" name=");
+static ngx_str_t str_wt=ngx_string(" weight=");
 static ngx_str_t str_rt=ngx_string("\n");
 static ngx_str_t str_st=ngx_string(" {\n");
 static ngx_str_t str_ed=ngx_string(" }\n");
@@ -295,8 +299,15 @@ ngx_xfdf_list_upstreams()
     for (i=0; i<xfdf_ups->upstreams->nelts; i++){
         len += str_up.len + ups[i].name->len + str_st.len;
         for (j=0; j < ups[i].num; j++) {
+        	char swt[4];
+            #if (NGX_HTTP_UPSTREAM_CHECK)
+			    sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer));
+		    #else
+			    sprintf(swt,"%lu",ups[i].peers[j].peer->weight);
+		    #endif
             len += str_sr.len+ ups[i].peers[j].peer->server.len + 
                    str_nm.len+ ups[i].peers[j].name.len +
+				   str_wt.len + strlen(swt) +
                    str_dn.len+ 1 +
                    str_rt.len;
         }
@@ -312,10 +323,25 @@ ngx_xfdf_list_upstreams()
             buf = ngx_strcat(buf ,str_st.data ,str_st.len );
             
             for (j=0; j < ups[i].num; j++) {
+                ngx_uint_t wtlen;
+                char swt[4];
+                #if (NGX_HTTP_UPSTREAM_CHECK)
+                    sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer));
+                #else
+                    sprintf(swt,"%lu",ups[i].peers[j].peer->weight);
+                #endif
+                wtlen=strlen(swt);
                 buf = ngx_strcat(buf ,str_sr.data ,str_sr.len );
                 buf = ngx_strcat(buf ,ups[i].peers[j].peer->server.data ,ups[i].peers[j].peer->server.len );
                 buf = ngx_strcat(buf ,str_nm.data ,str_nm.len );
                 buf = ngx_strcat(buf ,ups[i].peers[j].name.data ,ups[i].peers[j].name.len );
+                buf = ngx_strcat(buf ,str_wt.data ,str_wt.len );
+                #if (NGX_HTTP_UPSTREAM_CHECK)
+                    ngx_sprintf(buf,"%ui", ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer) );
+                #else
+                    ngx_sprintf(buf,"%ui",ups[i].peers[j].peer->weight);
+                #endif
+                buf += wtlen;
                 buf = ngx_strcat(buf ,str_dn.data ,str_dn.len );
                 #if (NGX_HTTP_UPSTREAM_CHECK)
                     ngx_sprintf(buf,"%ui", ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer) );
@@ -337,34 +363,64 @@ ngx_xfdf_list_upstreams()
 
 }
 
-void 
-ngx_xfdf_deal_server(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t dw)
+
+void *
+ngx_xfdf_deal_server_get_peer(ngx_http_upstream_rr_peer_t **fstp, ngx_str_t *up , ngx_str_t *sr)
 {
     ngx_http_upstream_xfdf_up_t    *ups;
     size_t i ,j;
 
     if (xfdf_ups->upstreams == NULL ){
-        return ;
+        return NULL;
     }
 
     ups = xfdf_ups->upstreams->elts;
     
     for (i=0; i<xfdf_ups->upstreams->nelts; i++){
         if (ups[i].name->len == up->len && ngx_strncasecmp(ups[i].name->data, up->data, up->len) == 0) {
+        	if (fstp != NULL){
+        		*fstp  = ups[i].peers[0].peer;
+        	}
             for (j=0; j < ups[i].num; j++) {
                 if (ups[i].peers[j].name.len == sr->len && ngx_strncasecmp(ups[i].peers[j].name.data, sr->data, sr->len) == 0) {
-                    #if (NGX_HTTP_UPSTREAM_CHECK)
-                        ngx_http_upstream_check_force_down_peer(ups[i].peers[j].peer,dw);
-                    #else
-                        ups[i].peers[j].peer->down = dw;
-                    #endif
-                    return ;
+                    return ups[i].peers[j].peer;
                 }
             }
         }
-    } 
+    }
+    return NULL;
 }
 
+
+void
+ngx_xfdf_deal_server(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t dw)
+{
+	ngx_http_upstream_rr_peer_t *p;
+
+	p = ngx_xfdf_deal_server_get_peer(NULL,up,sr);
+    if(p != NULL)
+    {
+		#if (NGX_HTTP_UPSTREAM_CHECK)
+			ngx_http_upstream_check_force_down_peer(p,dw);
+		#else
+			p->down = dw;
+		#endif
+    }
+}
+
+void
+ngx_xfdf_deal_peer_weight(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t w)
+{
+    #if (NGX_HTTP_UPSTREAM_CHECK)
+        ngx_http_upstream_rr_peer_t *p;
+        ngx_http_upstream_rr_peer_t *fstp ;
+		p = ngx_xfdf_deal_server_get_peer(&fstp,up,sr);
+		if(p != NULL)
+		{
+		    ngx_http_upstream_check_set_peer_weight(fstp,p,w);
+		}
+    #endif
+}
 
 /*  
 	ip hash，x-forwarded-for 1st , and then $remote_addr
@@ -498,15 +554,29 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
             hash = (hash * 113 + iphp->addr[i]) % 6271;
         }
 
-        w = hash % iphp->rrp.peers->total_weight;//得到所有服务的权重合并根据散列值取模
         peer = iphp->rrp.peers->peer;//server
+        #if (NGX_HTTP_UPSTREAM_CHECK)
+            w = hash % (iphp->rrp.peers->total_weight + ngx_http_upstream_get_v_total_weight(peer));//得到所有服务的权重合并根据散列值取模
+        #else
+            w = hash % iphp->rrp.peers->total_weight ;//得到所有服务的权重合并根据散列值取模
+        #endif
         p = 0;
 
         //得到被负载到的server，大权重的机率更高
-        while (w >= peer->weight) {
-            w -= peer->weight;
+//        while (w >= peer->weight) {
+        ngx_int_t pw=peer->weight;
+        #if (NGX_HTTP_UPSTREAM_CHECK)
+            pw=ngx_http_upstream_get_peer_weight(peer);
+        #endif
+        while (w >= pw) {
+//            w -= peer->weight;
+            w -= pw;
             peer = peer->next;
             p++;
+            pw=peer->weight;
+            #if (NGX_HTTP_UPSTREAM_CHECK)
+                pw=ngx_http_upstream_get_peer_weight(peer);
+            #endif
         }
 
         /*
@@ -531,8 +601,11 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
 
         #if (NGX_HTTP_UPSTREAM_CHECK)
         ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get hash peer, check peer down ");
-        if (ngx_http_upstream_check_peer_force_down(peer)) {
-            ngx_log_error(NGX_LOG_ERR, pc->log, 0, "xfdf - ip hash peer [%V] is force-down", &peer->server);
+        ngx_uint_t nut = ngx_http_upstream_check_peer_force_down(peer);
+        if (nut) {
+        	if(nut == 2) {
+                ngx_log_error(NGX_LOG_ERR, pc->log, 0, "xfdf - ip hash peer [%V] is force-down", &peer->server);
+        	}
             goto next;
         }
         if (ngx_http_upstream_check_peer_down(peer)) {
@@ -691,14 +764,27 @@ ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data)
         hp->hash += hash;
         hp->rehash++;
 
-        w = hp->hash % hp->rrp.peers->total_weight;
         peer = hp->rrp.peers->peer;
+        #if (NGX_HTTP_UPSTREAM_CHECK)
+            w = hp->hash % (hp->rrp.peers->total_weight + ngx_http_upstream_get_v_total_weight(peer));
+        #else
+            w = hp->hash % hp->rrp.peers->total_weight ;
+        #endif
+
         p = 0;
 
-        while (w >= peer->weight) {
-            w -= peer->weight;
+        ngx_int_t pw=peer->weight;
+        #if (NGX_HTTP_UPSTREAM_CHECK)
+            pw=ngx_http_upstream_get_peer_weight(peer);
+        #endif
+        while (w >= pw) {
+            w -= pw;
             peer = peer->next;
             p++;
+            pw=peer->weight;
+            #if (NGX_HTTP_UPSTREAM_CHECK)
+                pw=ngx_http_upstream_get_peer_weight(peer);
+            #endif
         }
 
         n = p / (8 * sizeof(uintptr_t));
@@ -716,8 +802,12 @@ ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data)
         
         #if (NGX_HTTP_UPSTREAM_CHECK)
         ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get hash peer, check peer down ");
-        if (ngx_http_upstream_check_peer_force_down(peer)) {
-            ngx_log_error(NGX_LOG_ERR, pc->log, 0,"xfdf - hash peer [%V] is force-down ", &peer->server);
+
+        ngx_uint_t nut = ngx_http_upstream_check_peer_force_down(peer);
+        if (nut) {
+        	if(nut == 2) {
+                ngx_log_error(NGX_LOG_ERR, pc->log, 0,"xfdf - hash peer [%V] is force-down ", &peer->server);
+        	}
             goto next;
         }
         if (ngx_http_upstream_check_peer_down(peer)) {
@@ -859,6 +949,9 @@ ngx_http_upstream_init_chash(ngx_conf_t *cf, ngx_http_upstream_srv_conf_t *us)
 
         prev_hash.value = 0;
         npoints = peer->weight * 160;
+        #if (NGX_HTTP_UPSTREAM_CHECK)
+            npoints=ngx_http_upstream_get_peer_weight(peer) * 160;
+        #endif
 
         for (j = 0; j < npoints; j++) {
             hash = base_hash;

@@ -12,6 +12,7 @@ upstream store {
 xfdf_ip_hash指令只有一个参数：
 						consistent：代表使用一致性hash算法
 						数字[1,4]：表示不使用一致性hash算法，只是ip hash，hash的强度从1到4，越高散列效果越好，当使用无效的数字则会使用默认3
+						rr : 代表负载不是hash算法，而是使用的轮循
 
 //
 一致性哈希算法，每个节点虚拟出160个虚拟节点算出哈希值组成环，将ip哈希后负载到对应的虚拟节点上，这样保证负载的均匀，
@@ -97,6 +98,11 @@ static int ngx_libc_cdecl
 ngx_http_upstream_chash_cmp_points(const void *one, const void *two);
 static ngx_int_t
 ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data);
+
+static ngx_int_t ngx_http_upstream_init_rr_peer(ngx_http_request_t *r,
+    ngx_http_upstream_srv_conf_t *us);
+static ngx_int_t ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc,
+    void *data);
 
 void *
 ngx_xfdf_deal_server_get_peer(ngx_http_upstream_rr_peer_t **fstp ,ngx_str_t *up , ngx_str_t *sr);
@@ -1214,6 +1220,235 @@ found:
 /**-- end --**/
 
 
+
+/**-- round robin --**/
+static ngx_int_t
+ngx_http_upstream_init_rr(ngx_conf_t *cf, ngx_http_upstream_srv_conf_t *us)
+{
+    ngx_http_upstream_rr_peers_t       *peers;
+    //
+    if (ngx_http_upstream_init_round_robin(cf, us) != NGX_OK) {
+        return NGX_ERROR;
+    }
+    peers = us->peer.data;
+
+    ngx_xfdf_init_upstream(cf->pool, peers);
+    //
+    #if (NGX_HTTP_UPSTREAM_CHECK)
+        ngx_http_upstream_rr_peer_t        *peer;
+
+        for (peer = peers->peer; peer; peer = peer->next) {
+            ngx_http_upstream_check_add_peer(cf, us, peer);
+        }
+        //backup server
+        if ( (peers = peers->next) ) {
+            for (peer = peers->peer; peer; peer = peer->next) {
+                ngx_http_upstream_check_add_peer(cf, us, peer);
+            }
+        }
+    #endif
+    //
+    us->peer.init = ngx_http_upstream_init_rr_peer;
+
+    return NGX_OK;
+}
+
+
+static ngx_int_t
+ngx_http_upstream_init_rr_peer(ngx_http_request_t *r,
+    ngx_http_upstream_srv_conf_t *us)
+{
+    if (ngx_http_upstream_init_round_robin_peer(r, us) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    r->upstream->peer.get = ngx_http_upstream_get_rr_peer;
+
+    return NGX_OK;
+}
+
+
+static ngx_http_upstream_rr_peer_t *
+ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_peer_data_t *rrp)
+{
+    time_t                        now;
+    uintptr_t                     m;
+    ngx_int_t                     total;
+    ngx_uint_t                    i, n, p;
+    ngx_http_upstream_rr_peer_t  *peer, *best;
+
+    now = ngx_time();
+
+    best = NULL;
+    total = 0;
+
+#if (NGX_SUPPRESS_WARN)
+    p = 0;
+#endif
+
+    for (peer = rrp->peers->peer, i = 0;
+         peer;
+         peer = peer->next, i++)
+    {
+        n = i / (8 * sizeof(uintptr_t));
+        m = (uintptr_t) 1 << i % (8 * sizeof(uintptr_t));
+
+        if (rrp->tried[n] & m) {
+            continue;
+        }
+
+        if (peer->down) {
+            continue;
+        }
+
+        #if (NGX_HTTP_UPSTREAM_CHECK)
+        ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get rr peer, check peer down ");
+        ngx_uint_t nut = ngx_http_upstream_check_peer_force_down(peer);
+        if (nut) {
+        	if(nut == 2) {
+                ngx_log_error(NGX_LOG_ERR, pc->log, 0, "xfdf - ip rr peer [%V] is force-down", &peer->server);
+        	}
+        	continue;
+        }
+        if (ngx_http_upstream_check_peer_down(peer)) {
+            ngx_log_error(NGX_LOG_ERR, pc->log, 0, "xfdf - ip rr peer [%V] is check-down", &peer->server);
+            continue;
+        }
+        #endif
+
+        if (peer->max_fails
+            && peer->fails >= peer->max_fails
+            && now - peer->checked <= peer->fail_timeout)
+        {
+            continue;
+        }
+
+        if (peer->max_conns && peer->conns >= peer->max_conns) {
+            continue;
+        }
+
+        peer->current_weight += peer->effective_weight;
+        total += peer->effective_weight;
+
+        if (peer->effective_weight < peer->weight) {
+            peer->effective_weight++;
+        }
+
+        if (best == NULL || peer->current_weight > best->current_weight) {
+            best = peer;
+            p = i;
+        }
+    }
+
+    if (best == NULL) {
+        return NULL;
+    }
+
+    rrp->current = best;
+
+    n = p / (8 * sizeof(uintptr_t));
+    m = (uintptr_t) 1 << p % (8 * sizeof(uintptr_t));
+
+    rrp->tried[n] |= m;
+
+    best->current_weight -= total;
+
+    if (now - best->checked > best->fail_timeout) {
+        best->checked = now;
+    }
+
+    return best;
+}
+
+
+//负载当前访问到后端服务器
+static ngx_int_t
+ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc, void *data)
+{
+	ngx_http_upstream_rr_peer_data_t  *rrp = data;
+
+	ngx_int_t                      rc;
+	ngx_uint_t                     i, n;
+	ngx_http_upstream_rr_peer_t   *peer;
+	ngx_http_upstream_rr_peers_t  *peers;
+
+	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf --- get rr peer, try: %ui", pc->tries);
+
+	pc->cached = 0;
+	pc->connection = NULL;
+
+	peers = rrp->peers;
+	ngx_http_upstream_rr_peers_wlock(peers);
+
+	if (peers->single) {
+		peer = peers->peer;
+
+		if (peer->down) {
+			goto failed;
+		}
+
+		if (peer->max_conns && peer->conns >= peer->max_conns) {
+			goto failed;
+		}
+
+		rrp->current = peer;
+
+	} else {
+		peer = ngx_http_upstream_get_peer_rr(pc,rrp);
+
+		if (peer == NULL) {
+			goto failed;
+		}
+
+		ngx_log_debug2(NGX_LOG_DEBUG_HTTP, pc->log, 0,"xfdf --- get rr peer, current: %p %i",peer, peer->current_weight);
+	}
+
+	pc->sockaddr = peer->sockaddr;
+	pc->socklen = peer->socklen;
+	pc->name = &peer->name;
+
+	peer->conns++;
+
+	ngx_http_upstream_rr_peers_unlock(peers);
+
+	return NGX_OK;
+
+failed:
+
+	if (peers->next) {
+
+		ngx_log_debug0(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf --- backup servers");
+
+		rrp->peers = peers->next;
+
+		n = (rrp->peers->number + (8 * sizeof(uintptr_t) - 1))
+				/ (8 * sizeof(uintptr_t));
+
+		for (i = 0; i < n; i++) {
+			rrp->tried[i] = 0;
+		}
+
+		ngx_http_upstream_rr_peers_unlock(peers);
+
+		rc = ngx_http_upstream_get_rr_peer(pc, rrp);
+
+		if (rc != NGX_BUSY) {
+			return rc;
+		}
+
+		ngx_http_upstream_rr_peers_wlock(peers);
+	}
+
+	ngx_http_upstream_rr_peers_unlock(peers);
+
+	pc->name = peers->name;
+
+	return NGX_BUSY;
+}
+
+/**-- end --**/
+
+
 static char *
 ngx_http_upstream_ip_hash(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
@@ -1247,6 +1482,8 @@ ngx_http_upstream_ip_hash(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     
     if (ngx_strcmp(value[1].data, "consistent") == 0) { //hash consistent
         uscf->peer.init_upstream = ngx_http_upstream_init_chash;
+    } else if (ngx_strcmp(value[1].data, "rr") == 0) { //round_robin
+        uscf->peer.init_upstream = ngx_http_upstream_init_rr;
     } else {    //
         deep = (u_char)ngx_atoi(value[1].data, sizeof(u_char) );
         if (deep>0 && deep<5) {

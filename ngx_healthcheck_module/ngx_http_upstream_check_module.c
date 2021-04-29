@@ -5,7 +5,6 @@
 #include <nginx.h>
 #include "ngx_http_upstream_check_module.h"
 
-
 typedef struct ngx_http_upstream_check_peer_s ngx_http_upstream_check_peer_t;
 typedef struct ngx_http_upstream_check_srv_conf_s
     ngx_http_upstream_check_srv_conf_t;
@@ -97,6 +96,8 @@ typedef struct {
     ngx_atomic_i_t                           v_weight;
     //the varialty of total_weight,only in 1st peer of upstream
     ngx_atomic_i_t                           v_total_weight;
+    //upstream name in hash code
+    ngx_uint_t                                upstream_name;
 
 } ngx_http_upstream_check_peer_shm_t;
 
@@ -483,7 +484,7 @@ static ngx_shm_zone_t *ngx_shared_memory_find(ngx_cycle_t *cycle,
     ngx_str_t *name, void *tag);
 static ngx_http_upstream_check_peer_shm_t *
 ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *peers_shm,
-    ngx_addr_t *addr);
+    ngx_addr_t *addr ,ngx_str_t *upname);
 
 static ngx_int_t ngx_http_upstream_check_init_shm_peer(
     ngx_http_upstream_check_peer_shm_t *peer_shm,
@@ -777,6 +778,18 @@ static ngx_check_status_command_t ngx_check_status_commands[] =  {
 static ngx_uint_t ngx_http_upstream_check_shm_generation = 0;
 static ngx_http_upstream_check_peers_t *check_peers_ctx = NULL;
 //static ngx_conf_t *check_conf = NULL ;
+
+//ngx_str_t to a hash code
+ngx_uint_t
+ngx_str_2_hash(ngx_str_t *s)
+{
+    ngx_uint_t i;
+    ngx_uint_t hash = 11;
+    for (i = 0; i < s->len; i++) {
+	    hash = (hash * 17 + s->data[i]) % 29;
+	}
+    return hash;
+}
 
 
 ngx_uint_t
@@ -4049,10 +4062,11 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
         ngx_memcpy(peer_shm->sockaddr, peer[i].peer_addr->sockaddr,
                    peer_shm->socklen);
 
-        if (opeers_shm) {
+        peer_shm->upstream_name = ngx_str_2_hash( peer[i].upstream_name ) ;
 
+        if (opeers_shm) {
             opeer_shm = ngx_http_upstream_check_find_shm_peer(opeers_shm,
-                                                              peer[i].peer_addr);
+                                                              peer[i].peer_addr , peer[i].upstream_name);
             if (opeer_shm) {
                 ngx_log_debug1(NGX_LOG_DEBUG_HTTP, shm_zone->shm.log, 0,
                                "http upstream check, inherit opeer: %V ",
@@ -4132,8 +4146,7 @@ ngx_shared_memory_find(ngx_cycle_t *cycle, ngx_str_t *name, void *tag)
 
 
 static ngx_http_upstream_check_peer_shm_t *
-ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *p,
-    ngx_addr_t *addr)
+ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *p, ngx_addr_t *addr ,ngx_str_t *upname)
 {
     ngx_uint_t                          i;
     ngx_http_upstream_check_peer_shm_t *peer_shm;
@@ -4145,8 +4158,9 @@ ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *p,
         if (addr->socklen != peer_shm->socklen) {
             continue;
         }
+        if (ngx_str_2_hash(upname) == peer_shm->upstream_name
+        		&& ngx_memcmp(addr->sockaddr, peer_shm->sockaddr, addr->socklen) == 0) {
 
-        if (ngx_memcmp(addr->sockaddr, peer_shm->sockaddr, addr->socklen) == 0) {
             return peer_shm;
         }
     }
@@ -4176,6 +4190,7 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
         psh->weight   = opsh->weight;
         psh->v_weight = opsh->v_weight;
         psh->v_total_weight = opsh->v_total_weight;
+        psh->upstream_name = opsh->upstream_name;
 
     } else {
         psh->access_time  = 0;

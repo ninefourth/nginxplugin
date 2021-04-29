@@ -166,23 +166,50 @@ static ngx_str_t str_rt=ngx_string("\n");
 static ngx_str_t str_st=ngx_string(" {\n");
 static ngx_str_t str_ed=ngx_string(" }\n");
 
-/*
-static char*
+
+char*
 ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str){
     char *s;
     s=ngx_palloc(pool,str->len);
     ngx_memcpy(s,str->data,str->len);
     s[str->len]='\0';
     return s;
-}*/
+}
 
-static u_char*
+u_char*
 ngx_strcat(u_char* des , u_char* src , size_t len) {
     ngx_memcpy(des, src, len);
     des += len;
     return des;
 }
 
+
+ngx_http_variable_t *
+ngx_http_get_variable_by_name(ngx_conf_t *cf, ngx_str_t *name)
+{
+    ngx_uint_t                  i;
+    ngx_http_variable_t        *v;
+    ngx_http_core_main_conf_t  *cmcf;
+
+    if (name->len == 0) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "invalid variable name \"$\"");
+        return NULL;
+    }
+
+    cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+
+    v = cmcf->variables.elts;
+
+    if (v != NULL) {
+        for (i = 0; i < cmcf->variables.nelts; i++,v++) {
+            if (name->len == v->name.len && ngx_strncasecmp(name->data, v->name.data, name->len) == 0) {
+                return v;
+            }
+        }
+    }
+
+    return NULL;
+}
 
 static u_char*
 ngx_http_upstream_ip_get(ngx_http_request_t *r, u_char **theip )
@@ -1495,7 +1522,7 @@ ngx_http_upstream_ip_hash(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     }
 
     xfdfcf->remoteaddr_index = ngx_http_get_variable_index(cf, &strremote);
-    
+
     xfdf_ups = ngx_palloc(cf->pool, sizeof(ngx_http_upstream_xfdf_ups_t));
     xfdf_ups->upstreams = ngx_array_create(cf->pool, 1, sizeof(ngx_http_upstream_xfdf_up_t));
     xfdf_ups->pool = cf->pool;

@@ -23,5 +23,19 @@ ngx_uint_t ngx_http_upstream_get_peer_weight(void *p);
 void ngx_http_upstream_check_set_peer_weight(void *fstp,void *p, ngx_uint_t w);
 ngx_int_t ngx_http_upstream_get_v_total_weight(void *fstp);
 
+void ngx_reload_var_conf(ngx_str_t *f,ngx_int_t flag);
+ngx_buf_t *ngx_list_var(ngx_pool_t *pool,ngx_int_t flag);
+
+ngx_str_t *ngx_http_get_variable_head(ngx_http_request_t *r, u_char *name , size_t len);
+ngx_http_variable_value_t *ngx_http_get_variable_req(ngx_http_request_t *r, ngx_str_t *name);
+ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len);
+
+//ngx_uint_t ngx_is_test(ngx_str_t)
+#define FORTEST                   0x0001
+#define FORGRAY                   0x0002
+#define NGX_TRUE                  1
+#define NGX_FALSE                 0
+
+
 #endif //_NGX_HTTP_UPSTREAM_CHECK_MODELE_H_INCLUDED_
 

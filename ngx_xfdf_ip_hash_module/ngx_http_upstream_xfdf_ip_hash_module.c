@@ -455,6 +455,7 @@ ngx_xfdf_deal_peer_weight(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t w)
     #endif
 }
 
+
 /*  
 	ip hash，x-forwarded-for 1st , and then $remote_addr
 */

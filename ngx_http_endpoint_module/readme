@@ -32,6 +32,41 @@ http://192.168.7.233:8100/down/store1/0/log
 #挂载server /up/{upstream_name}/{server_name}
 http://192.168.7.233:8100/up/store1/0
 
-二.动态设置服务器负载权重
+三.动态设置服务器负载权重
 #设置权重 /weight/{upstream_name}/{server_name}/{权重数值}
 http://192.168.27.74:8100/weight/store1/1/2
+
+四.添加灰度及测试列表
+#重新载入测试访问列表,conf参数值是列表配置文件地址名称
+http://192.168.27.74:8100/fortest?conf=conf/test.conf
+#重新载入灰度访问列表,conf参数值是列表配置文件地址名称
+http://192.168.27.74:8100/forgray?conf=conf/gray.conf
+#列出测试访问列表的哈希内容
+http://192.168.27.74:8100/listtest
+#列出灰度访问列表的哈希内容
+http://192.168.27.74:8100/listgray
+
+灰度/测试访问列表内容格式如下：
+#每一段的变量名同nginx中的变量一至
+# - 匹配$host变量的值，即是服务器地址
+[host]
+www.fxscm.net.cn
+fxscm.net
+# - 匹配$remote_addr变量的值，即是直接客户端ip
+[remote_addr]
+137.0.0.1
+# - 匹配消息头中变量a的值
+[http_a]
+aa
+# - 匹配get地址中的参数a的值
+[arg_a]
+ab
+
+#在nginx.conf文件中将需要灰度或测试的地方加入变量判断为1即可（变量名对应 $forgray 与 $fortest），如：
+set $psurl http://appupstream;
+if ( $fortest = 1 ){
+    set $psurl http://test_appupstream;
+}
+if ( $forgray = 1 ){
+    set $psurl http://gray_appupstream;
+}

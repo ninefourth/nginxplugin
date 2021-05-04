@@ -5,6 +5,11 @@
 #include <nginx.h>
 #include "ngx_http_upstream_check_module.h"
 
+
+#if (NGX_HTTP_UPSTREAM_XFDF_IP_HASH)
+#include "ngx_http_upstream_xfdf_ip_hash_module.h"
+#endif
+
 typedef struct ngx_http_upstream_check_peer_s ngx_http_upstream_check_peer_t;
 typedef struct ngx_http_upstream_check_srv_conf_s
     ngx_http_upstream_check_srv_conf_t;
@@ -101,11 +106,27 @@ typedef struct {
 
 } ngx_http_upstream_check_peer_shm_t;
 
+typedef struct {
+	u_char                                   var_name[100];
+	ngx_uint_t                               values_hash[100];
+} ngx_variables_item;
+
+typedef struct {
+    ngx_variables_item                       items[100];
+} ngx_variables_item_list;
+
 
 typedef struct {
     ngx_uint_t                               generation;
     ngx_uint_t                               checksum;
     ngx_uint_t                               number;
+
+    //for test domain
+    ngx_variables_item_list                 var_test_hash;
+    ngx_int_t                               domain_test_hash[100];
+    //for gray domain
+    ngx_variables_item_list                 var_gray_hash;
+    ngx_int_t                               domain_gray_hash[100];
 
     /* ngx_http_upstream_check_status_peer_t */
     ngx_http_upstream_check_peer_shm_t       peers[1];
@@ -473,6 +494,8 @@ static char *ngx_http_upstream_check_init_srv_conf(ngx_conf_t *cf, void *conf);
 static void *ngx_http_upstream_check_create_loc_conf(ngx_conf_t *cf);
 static char * ngx_http_upstream_check_merge_loc_conf(ngx_conf_t *cf,
     void *parent, void *child);
+static ngx_int_t
+ngx_http_upstream_check_add_variables(ngx_conf_t *cf);
 
 #define SHM_NAME_LEN 256
 
@@ -496,6 +519,9 @@ static ngx_int_t ngx_http_upstream_check_init_shm_zone(
 
 
 static ngx_int_t ngx_http_upstream_check_init_process(ngx_cycle_t *cycle);
+
+static void custom_variable_set_value(ngx_http_request_t *r, ngx_http_variable_value_t *v, uintptr_t data);
+static ngx_int_t custom_variable_get_value(ngx_http_request_t *r, ngx_http_variable_value_t *v, uintptr_t data);
 
 
 static ngx_conf_bitmask_t  ngx_check_http_expect_alive_masks[] = {
@@ -563,7 +589,7 @@ static ngx_command_t  ngx_http_upstream_check_commands[] = {
 
 
 static ngx_http_module_t  ngx_http_upstream_check_module_ctx = {
-    NULL,                                    /* preconfiguration */
+    ngx_http_upstream_check_add_variables,   /* preconfiguration */
     NULL,                                    /* postconfiguration */
 
     ngx_http_upstream_check_create_main_conf,/* create main configuration */
@@ -774,21 +800,325 @@ static ngx_check_status_command_t ngx_check_status_commands[] =  {
     { ngx_null_string, NULL }
 };
 
+ngx_uint_t ngx_str_2_hash(ngx_str_t *s);
 
 static ngx_uint_t ngx_http_upstream_check_shm_generation = 0;
 static ngx_http_upstream_check_peers_t *check_peers_ctx = NULL;
+static ngx_str_t one=ngx_string("1");
+static ngx_str_t zero=ngx_string("0");
 //static ngx_conf_t *check_conf = NULL ;
+static ngx_str_t http_head=ngx_string("http_");
+
+//custom variable for test and gray
+
+//costome variable $fortest and $forgray
+static ngx_http_variable_t  ngx_http_custom_vars[] = {
+    { ngx_string("fortest"), custom_variable_set_value, custom_variable_get_value, FORTEST, NGX_HTTP_VAR_CHANGEABLE, 0 },
+    { ngx_string("forgray"), custom_variable_set_value, custom_variable_get_value, FORGRAY, NGX_HTTP_VAR_CHANGEABLE, 0 },
+    ngx_http_null_variable
+};
+
 
 //ngx_str_t to a hash code
-ngx_uint_t
-ngx_str_2_hash(ngx_str_t *s)
+ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size)
 {
     ngx_uint_t i;
-    ngx_uint_t hash = 11;
-    for (i = 0; i < s->len; i++) {
-	    hash = (hash * 17 + s->data[i]) % 29;
+    ngx_uint_t hash = 89;
+    for (i = 0; i < size; i++) {
+	    hash = (hash * 5051 + s[i]) % 987631;
 	}
     return hash;
+}
+
+ngx_uint_t ngx_str_2_hash(ngx_str_t *s)
+{
+	return ngx_chars_2_hash(s->data,s->len);
+}
+
+
+void cpy_chars(u_char *des , u_char *sor , size_t size){
+	for(/*void*/ ; size-- >0; des++ ,sor++) {
+		*des = *sor;
+	}
+	*des='\0';
+}
+
+ngx_uint_t read_line(u_char *buf)
+{
+	ngx_uint_t size = 0;
+	u_char *pbuf = buf;
+	while( *pbuf != '\n' && *pbuf != '\0' ){
+		pbuf++;
+		size++;
+	}
+	return size;
+}
+
+void ngx_reload_var_conf(ngx_str_t *f , ngx_int_t flag)
+{
+	ngx_fd_t          fd;
+	size_t            size;
+	u_char              *buf ,*hdbuf ;
+	ssize_t           n;
+	ngx_file_info_t   fi;
+	//
+	ngx_int_t i = -1 , j=0 ;
+	ngx_uint_t sz = 0;
+	ngx_variables_item_list *items = NULL ;
+	//
+	if (flag == FORGRAY){
+	    items = &check_peers_ctx->peers_shm->var_gray_hash;
+	} else if(flag == FORTEST){
+	    items = &check_peers_ctx->peers_shm->var_test_hash;
+	}
+
+	if(items == NULL) return;
+
+	fd = ngx_open_file(f->data, NGX_FILE_RDONLY, NGX_FILE_OPEN, 0);
+
+    if (fd != NGX_INVALID_FILE) {
+    	ngx_fd_info(fd, &fi);
+    	if ( ngx_fd_info(fd, &fi) != NGX_FILE_ERROR) {
+//            size = lseek(fd, 0, SEEK_END);
+    		size = fi.st_size;
+            if (size > 0){
+            	hdbuf = buf = malloc(size+1);
+                if (buf != NULL){
+                	n = ngx_read_fd(fd, buf, size);
+                    if (n > 0){
+                        buf[size]='\0';
+                        items->items[0].var_name[0] = '\0';
+
+                    	while ( *buf != '\0' ){
+                    	    sz = read_line(buf);
+                    	    if(sz > 0){
+                                if ( *buf == '[' && *(buf+sz-1) ==']' ){ //a variable
+                                	i++;
+                                	j = 0;
+                                	cpy_chars(items->items[i].var_name , buf+1 ,sz-2 ); //except '[' and ']'
+                                	items->items[i+1].var_name[0] = '\0';
+                                } else {
+                                	if (i >= 0 && *buf != '#'){
+                                	    items->items[i].values_hash[j++] = ngx_chars_2_hash(buf,sz);
+                                	    items->items[i].values_hash[j] = 0;
+                                	}
+                                }
+                    	    	buf += sz;
+                    	    	if(*buf == '\0'){
+                    	    		break;
+                    	    	}
+                    	    }
+                    	    buf++;
+                    	}
+
+                    }
+                    free(hdbuf);
+                }
+
+            }
+    	}
+
+    	if (ngx_close_file(fd) == NGX_FILE_ERROR) {
+//            ngx_log_error(NGX_LOG_ALERT, cf->log, ngx_errno,ngx_close_file_n " %s failed",f->data);
+        }
+
+    }
+
+/*
+	ngx_str_t s[] = {
+			ngx_string("www.test.com")
+			,ngx_string("test.com")
+			,ngx_string("gay.com")
+			,ngx_string("fxscm.com")
+			,ngx_string("fxscm.biz")
+			,ngx_string("fxscm.net")
+			,ngx_null_string
+	};
+	if (check_peers_ctx != NULL){
+		ngx_int_t *thash = check_peers_ctx->peers_shm->domain_gray_hash;
+		for (ngx_uint_t i = 0 ; ; i++){
+			if(s[i].len == 0){
+				thash[i] = -1 ;
+				break;
+			}
+			thash[i] = ngx_str_2_hash(&s[i]);
+		}
+	}*/
+}
+
+
+ngx_buf_t *ngx_list_var(ngx_pool_t *pool,ngx_int_t flag)
+{
+    ngx_buf_t                  *buf;
+    ngx_int_t i =0 ,j=0;
+    ngx_variables_item_list *items = NULL;
+
+    if(flag == FORGRAY) items = &check_peers_ctx->peers_shm->var_gray_hash;
+    if(flag == FORTEST) items = &check_peers_ctx->peers_shm->var_test_hash;
+
+    buf = ngx_create_temp_buf(pool, 128);
+	if (buf != NULL) {
+	    buf->last = ngx_sprintf(buf->last, "pid is :%P\n", ngx_pid );
+
+	    while(items->items[i].var_name[0]){
+	    	ngx_str_t n;
+	    	n.data = items->items[i].var_name;
+	    	n.len = strlen((char*)items->items[i].var_name);
+	    	buf->last = ngx_sprintf(buf->last, "name is :%V\n", &n );
+	    	while (items->items[i].values_hash[j] > 0){
+		    	buf->last = ngx_sprintf(buf->last, "%l\n", items->items[i].values_hash[j] );
+	    		j++;
+	    	}
+	    	j=0;
+	    	i++ ;
+	    }
+    }
+	return buf;
+}
+
+
+ngx_buf_t *ngx_list_test(ngx_pool_t *pool)
+{
+    ngx_buf_t                  *buf;
+    buf = ngx_create_temp_buf(pool, 64);
+	if (buf != NULL) {
+	    buf->last = ngx_sprintf(buf->last, "pid is :%P\n", ngx_pid );
+		ngx_int_t *thash = check_peers_ctx->peers_shm->domain_gray_hash;
+		for (ngx_uint_t i=0 ;i < 100 ;i++){
+			if (thash[i] == -1 ){
+				break;
+			}
+            buf->last = ngx_sprintf(buf->last, "%l\n", thash[i]);
+		}
+    }
+	return buf;
+}
+
+ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len)
+{
+    while( len-- > 0 ){
+    	if( *des++ != *head++){
+    		return NGX_FALSE;
+    	}
+    }
+    return NGX_TRUE;
+}
+
+ngx_str_t *ngx_http_get_variable_head(ngx_http_request_t *r, u_char *name , size_t len){
+	size_t c ,i;
+	ngx_table_elt_t *header;
+	ngx_str_t s;
+    header = r->headers_in.headers.part.elts;
+    c = r->headers_in.headers.part.nelts;//get count of headers
+    for(i=0 ;len>0 && i<c; i++) {
+        s.data = header[i].lowcase_key;
+        s.len = header[i].key.len;
+        if ( s.len == len && ngx_strncmp( name, s.data, len ) == 0){
+            return &header[i].value ;
+        }
+    }
+    return NULL;
+}
+
+
+ngx_http_variable_value_t *ngx_http_get_variable_req(ngx_http_request_t *r, ngx_str_t *name)
+{
+    ngx_http_variable_t        *v;
+    ngx_http_core_main_conf_t  *cmcf;
+
+    ngx_uint_t                 i;
+
+	if (name->len == 0) {
+		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,"[ngx_http_get_variable]: invalid variable name : %V",name);
+		return NULL;
+	}
+
+	cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
+
+	v = cmcf->variables.elts;
+
+	if (v == NULL) {
+		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,"[ngx_http_get_variable]: variables is NULL ");
+		return NULL;
+
+	} else {
+		for (i = 0; i < cmcf->variables.nelts; i++) {
+			if (name->len != v[i].name.len || ngx_strncasecmp(name->data, v[i].name.data, name->len) != 0)
+			{
+				continue;
+			}
+			if (v[i].get_handler && v[i].get_handler(r, &r->variables[i], v[i].data) == NGX_OK) {
+
+				if (v[i].flags & NGX_HTTP_VAR_NOCACHEABLE) {
+					r->variables[i].no_cacheable = 1;
+				}
+
+				return &r->variables[i];
+			}
+		}
+	}
+
+    return NULL;
+}
+
+
+static void custom_variable_set_value(ngx_http_request_t *r, ngx_http_variable_value_t *v, uintptr_t data)
+{
+	//
+}
+
+static ngx_int_t custom_variable_get_value(ngx_http_request_t *r, ngx_http_variable_value_t *v, uintptr_t data)
+{
+	ngx_variables_item_list *items;
+	//
+    switch(data){
+        case FORTEST:
+        	items = &check_peers_ctx->peers_shm->var_test_hash;
+            break;
+        case FORGRAY:
+        	items = &check_peers_ctx->peers_shm->var_gray_hash;
+            break;
+        default:
+        	return NGX_ERROR;
+    }
+
+	ngx_str_t s;
+	ngx_str_t *sh;
+	ngx_uint_t idx = 0;
+	ngx_http_variable_value_t *vl;
+    ngx_int_t i=0,j=0;
+    v->data = zero.data;
+	v->len = zero.len;
+	v->valid = 0;
+    while(items->items[i].var_name[0]){
+    	s.data = items[i].items[j].var_name;
+		s.len = strlen((char*)items[i].items[j].var_name);
+		if (s.len >= http_head.len && ngx_str_startwith( s.data, http_head.data, http_head.len) ) {
+			sh = ngx_http_get_variable_head(r,s.data+http_head.len , s.len - http_head.len);
+			if(sh){
+				idx = ngx_str_2_hash(sh);
+			}
+		} else {
+			vl = ngx_http_get_variable_req(r , &s);
+			if(vl){
+				idx = ngx_chars_2_hash(vl->data,vl->len);
+			}
+		}
+		//
+		while(idx >0 && items->items[i].values_hash[j] > 0){
+			if(items->items[i].values_hash[j++] == idx){
+				v->data = one.data;
+				v->len = one.len;
+				v->valid = 1;
+				return NGX_OK;
+			}
+		}
+    	j=0;
+    	i++;
+    }
+
+
+	return NGX_OK;
 }
 
 
@@ -3601,6 +3931,7 @@ ngx_http_upstream_check_create_main_conf(ngx_conf_t *cf)
         return NULL;
     }
 
+
     return ucmcf;
 }
 
@@ -3711,6 +4042,7 @@ ngx_http_upstream_check_create_fastcgi_request(ngx_pool_t *pool,
 }
 
 
+
 static char *
 ngx_http_upstream_check_init_main_conf(ngx_conf_t *cf, void *conf)
 {
@@ -3770,6 +4102,25 @@ ngx_http_upstream_check_create_srv_conf(ngx_conf_t *cf)
     ucscf->check_cmd_on=0;
 
     return ucscf;
+}
+
+
+static ngx_int_t
+ngx_http_upstream_check_add_variables(ngx_conf_t *cf)
+{
+    ngx_http_variable_t  *var, *v;
+    for (v = ngx_http_custom_vars; v->name.len; v++) {
+        var = ngx_http_add_variable(cf, &v->name, v->flags);
+	    if (var == NULL) {
+	        return NGX_ERROR;
+	    }
+
+	    var->set_handler = v->set_handler;
+	    var->get_handler = v->get_handler;
+	    var->data = v->data;
+	}
+
+    return NGX_OK;
 }
 
 
@@ -3903,8 +4254,8 @@ ngx_http_upstream_check_init_shm(ngx_conf_t *cf, void *conf)
         ngx_http_upstream_check_get_shm_name(shm_name, cf->pool,
                                     ngx_http_upstream_check_shm_generation);
 
-        /* The default check shared memory size is 1M */
-        shm_size = 1 * 1024 * 1024;
+        /* The default check shared memory size is 5M */
+        shm_size = 5 * 1024 * 1024;
 
         shm_size = shm_size < ucmcf->check_shm_size ?
                               ucmcf->check_shm_size : shm_size;
@@ -4065,6 +4416,13 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
         peer_shm->upstream_name = ngx_str_2_hash( peer[i].upstream_name ) ;
 
         if (opeers_shm) {
+        	if(opeers_shm->var_gray_hash.items[0].var_name[0]){
+        		memcpy( &peers_shm->var_gray_hash , &opeers_shm->var_gray_hash, sizeof(opeers_shm->var_gray_hash));
+        	}
+        	if(opeers_shm->var_test_hash.items[0].var_name[0]){
+        		memcpy( &peers_shm->var_test_hash , &opeers_shm->var_test_hash,sizeof(opeers_shm->var_test_hash));
+        	}
+
             opeer_shm = ngx_http_upstream_check_find_shm_peer(opeers_shm,
                                                               peer[i].peer_addr , peer[i].upstream_name);
             if (opeer_shm) {

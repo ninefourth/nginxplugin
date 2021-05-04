@@ -7,6 +7,11 @@
 #include "ngx_http_upstream_xfdf_ip_hash_module.h"
 #endif
 
+#if (NGX_HTTP_UPSTREAM_CHECK)
+#include "ngx_http_upstream_check_module.h"
+#endif
+
+
 static char *ngx_http_endpoint(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 //static void *ngx_http_endpoint_create_srv_conf(ngx_conf_t *cf);
 
@@ -57,7 +62,6 @@ ngx_module_t  ngx_http_endpoint_module = {
 
 
 static ngx_str_t sucs = ngx_string("success");
-
 
 ngx_array_t *
 ngx_http_endpoint_parse_path(ngx_pool_t *pool, ngx_str_t *path)
@@ -110,6 +114,44 @@ ngx_http_endpoint_parse_path(ngx_pool_t *pool, ngx_str_t *path)
 }
 
 
+static void
+ngx_http_get_param_value(ngx_http_request_t *r , u_char *param , ngx_uint_t len , ngx_str_t *value)
+{
+	ngx_uint_t i,j , k=0;
+	ngx_str_t *args = &r->args;
+
+	value->len=0;
+
+	if(args && args->len > len ){
+		for(i=0,j=0; i<args->len; i++){
+			if( k==2 ){
+				if( args->data[i] == '&'){
+					break;
+				}
+                value->len++;
+			}else if( k==1 || i==0 || args->data[i]=='&' ){
+				if(args->data[i]=='&') i++;
+				if(i >= args->len) break;
+				if(j == len && args->data[i] == '='){
+                    k=2;
+                    if(i < args->len-2){
+                        value->data = &args->data[++i];
+                        value->len = 1;
+                    }
+                    continue;
+				}
+				if(args->data[i] == param[j++]){
+					k=1;
+					continue;
+				}else{
+					k=0;
+					j=0;
+				}
+			}
+		}
+	}
+}
+
 
 static ngx_int_t
 ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
@@ -119,6 +161,8 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     ngx_chain_t                out;
     ngx_str_t                  *con;
     ngx_str_t                  *value;
+    ngx_int_t                  g=0,t=0;
+    ngx_str_t                  arg_cf=ngx_string("conf");
 
     rc = ngx_http_discard_request_body(r);
     if (rc != NGX_OK) {
@@ -185,9 +229,33 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
                 buf->last = ngx_sprintf(buf->last, "%V\n", &sucs);
             }
         }
+    } else if (value[0].len == 7 && (t=(ngx_strncasecmp(value[0].data, (u_char *)"fortest", 7) == 0) ||
+    		(g=ngx_strncasecmp(value[0].data, (u_char *)"forgray", 7) == 0) )) {
+    	ngx_str_t f;
+        ngx_http_get_param_value(r,arg_cf.data , arg_cf.len , &f);
+    	if(f.len >0 ){
+//			ngx_str_t *f = &value[1]; //test configure file
+//			ngx_str_t f = ngx_string("conf/test.conf");
+//    		f.data = (u_char*)"conf/test.conf";
+//    		f.len = 14;
+			//
+			if(t) status = FORTEST;
+			if(g) status = FORGRAY;
+			f.data = (u_char*)ngx_strcpy(r->pool,&f);
+			ngx_reload_var_conf(&f,status);
+			buf = ngx_create_temp_buf(r->pool, sucs.len);
+			if (buf != NULL) {
+				buf->last = ngx_sprintf(buf->last, "%V\n", &sucs );
+			}
+		}
+    } else if (value[0].len == 8 && (t=(ngx_strncasecmp(value[0].data, (u_char *)"listtest", 8) == 0) ||
+    		(g=ngx_strncasecmp(value[0].data, (u_char *)"listgray", 8) == 0) )) {
+    	if(t) status = FORTEST;
+    	if(g) status = FORGRAY;
+    	buf = ngx_list_var(r->pool,status);
     }
 
-    
+
     if( buf !=NULL && ngx_buf_size(buf) == 0) {
         status = NGX_HTTP_NO_CONTENT;
     } else {
@@ -230,8 +298,6 @@ ngx_http_endpoint_handler(ngx_http_request_t *r)
 
     return ngx_http_endpoint_do_get(r, res);
 }
-
-
 
 static char *
 ngx_http_endpoint(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)

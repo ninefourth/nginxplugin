@@ -13,6 +13,7 @@
 
 
 static char *ngx_http_endpoint(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_var_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 //static void *ngx_http_endpoint_create_srv_conf(ngx_conf_t *cf);
 
 
@@ -25,6 +26,12 @@ static ngx_command_t  ngx_http_endpoint_commands[] = {
       0,
       0,
       NULL },
+	{ ngx_string("var_conf"),
+	  NGX_HTTP_LOC_CONF|NGX_CONF_1MORE,
+	  ngx_http_var_conf,
+	  0,
+	  0,
+	  NULL },
 
       ngx_null_command
 };
@@ -161,7 +168,6 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     ngx_chain_t                out;
     ngx_str_t                  *con;
     ngx_str_t                  *value;
-    ngx_int_t                  g=0,t=0;
     ngx_str_t                  arg_cf=ngx_string("conf");
 
     rc = ngx_http_discard_request_body(r);
@@ -229,30 +235,23 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
                 buf->last = ngx_sprintf(buf->last, "%V\n", &sucs);
             }
         }
-    } else if (value[0].len == 7 && (t=(ngx_strncasecmp(value[0].data, (u_char *)"fortest", 7) == 0) ||
-    		(g=ngx_strncasecmp(value[0].data, (u_char *)"forgray", 7) == 0) )) {
-    	ngx_str_t f;
-        ngx_http_get_param_value(r,arg_cf.data , arg_cf.len , &f);
-    	if(f.len >0 ){
-//			ngx_str_t *f = &value[1]; //test configure file
-//			ngx_str_t f = ngx_string("conf/test.conf");
-//    		f.data = (u_char*)"conf/test.conf";
-//    		f.len = 14;
-			//
-			if(t) status = FORTEST;
-			if(g) status = FORGRAY;
-			f.data = (u_char*)ngx_strcpy(r->pool,&f);
-			ngx_reload_var_conf(&f,status);
-			buf = ngx_create_temp_buf(r->pool, sucs.len);
-			if (buf != NULL) {
-				buf->last = ngx_sprintf(buf->last, "%V\n", &sucs );
-			}
-		}
-    } else if (value[0].len == 8 && (t=(ngx_strncasecmp(value[0].data, (u_char *)"listtest", 8) == 0) ||
-    		(g=ngx_strncasecmp(value[0].data, (u_char *)"listgray", 8) == 0) )) {
-    	if(t) status = FORTEST;
-    	if(g) status = FORGRAY;
-    	buf = ngx_list_var(r->pool,status);
+    } else if (value[0].len == 9 && ngx_strncasecmp(value[0].data, (u_char *)"variables", 9) == 0 ) {
+    	if( resource->nelts == 2 ){
+    		ngx_str_t *varname = &value[1]; //variable name
+        	ngx_str_t f;
+            ngx_http_get_param_value(r,arg_cf.data , arg_cf.len , &f);
+        	if(f.len >0 ){
+    			f.data = (u_char*)ngx_strcpy(r->pool,&f);
+    			ngx_reload_var_conf(&f,varname);
+    			buf = ngx_create_temp_buf(r->pool, sucs.len);
+    			if (buf != NULL) {
+    				buf->last = ngx_sprintf(buf->last, "%V\n", &sucs );
+    			}
+        	}
+    	}else if( resource->nelts == 3 &&  value[2].len == 4 && ngx_strncasecmp(value[2].data, (u_char *)"list", 4) == 0){
+    		ngx_str_t *varname = &value[1]; //variable name
+        	buf = ngx_list_var(r->pool,varname);
+    	}
     }
 
 
@@ -306,6 +305,37 @@ ngx_http_endpoint(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
     clcf->handler = ngx_http_endpoint_handler;
+
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_var_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    #if (NGX_HTTP_UPSTREAM_CHECK)
+    if(cf->args->nelts > 1){
+    	ngx_uint_t i ,j;
+        ngx_str_t *value = cf->args->elts ,*val ,v_n,v_cf;
+    	for(i=1; i<cf->args->nelts; i++){
+    		val = &value[i];
+    		for(j=1;j < val->len-1 ;j++){
+    			//has a configure file
+    			if(val->data[j] == '='){
+    				v_n.data=val->data;
+    				v_n.len=j;
+    				v_cf.data=&val->data[j+1];
+    				v_cf.len=val->len-j-1;
+    				v_cf.data = (u_char*)ngx_strcpy(cf->pool,&v_cf);
+    				ngx_http_upstream_check_add_variable(cf,&v_n);
+    				ngx_preload_var_conf(&v_n,&v_cf);
+    				break;
+    			}
+    		}
+    		//if has no configure file
+    		ngx_http_upstream_check_add_variable(cf,val);
+    	}
+    }
+    #endif
 
     return NGX_CONF_OK;
 }

@@ -7,8 +7,12 @@ server {
         server_name 192.168.7.233 127.0.0.1;
         location / {
             endpoint;
+            var_conf forgray fortest=/usr/local/conf/test.conf ;
         }
     }
+
+endpoint: 暴露端点
+var_conf: 如果使用自定义变量(取值为0/1)则在此指令处理注册，forgray是自定义变量名，含“=”的参数，前部是自定义变量名，后半部是变量对应的配置文件(绝对路径)
 
 目前完成的功能
 一.列出所有upstream
@@ -36,17 +40,23 @@ http://192.168.7.233:8100/up/store1/0
 #设置权重 /weight/{upstream_name}/{server_name}/{权重数值}
 http://192.168.27.74:8100/weight/store1/1/2
 
-四.添加灰度及测试列表
-#重新载入测试访问列表,conf参数值是列表配置文件地址名称
-http://192.168.27.74:8100/fortest?conf=conf/test.conf
-#重新载入灰度访问列表,conf参数值是列表配置文件地址名称
-http://192.168.27.74:8100/forgray?conf=conf/gray.conf
-#列出测试访问列表的哈希内容
-http://192.168.27.74:8100/listtest
-#列出灰度访问列表的哈希内容
-http://192.168.27.74:8100/listgray
+四.添加自定义变量对应用户规则列表
+#注意，必须在endpoint指令后添加自定义变量名，方可正常使用：
+如：
+    location / {
+        var_conf fortest forgray;
+    }
+#载入变量-用户规则列表，{var_name}自定义变量名，参数conf是指定列表文件位置
+http://192.168.27.74:8100/variable/{var_name}?conf=conf/test.conf
+#列出列表的哈希内容，{var_name}自定义变量名
+http://192.168.27.74:8100/variable/{var_name}/list
+例如：
+##重新载入测试访问列表(fortest),conf参数值是列表配置文件地址名称
+http://192.168.27.74:8100/variable/fortest?conf=conf/test.conf
+##列出测试访问列表(fortest)的哈希内容
+http://192.168.27.74:8100/variable/fortest/list
 
-灰度/测试访问列表内容格式如下：
+配置列表内容格式如下：
 #每一段的变量名同nginx中的变量一至
 # - 匹配$host变量的值，即是服务器地址
 [host]
@@ -63,6 +73,16 @@ aa
 ab
 
 #在nginx.conf文件中将需要灰度或测试的地方加入变量判断为1即可（变量名对应 $forgray 与 $fortest），如：
+...
+server {
+        listen 8100;
+        server_name 192.168.7.233 127.0.0.1;
+        location / {
+            endpoint;
+            var_conf fortest forgray;
+        }
+    }
+...
 set $psurl http://appupstream;
 if ( $fortest = 1 ){
     set $psurl http://test_appupstream;
@@ -70,3 +90,4 @@ if ( $fortest = 1 ){
 if ( $forgray = 1 ){
     set $psurl http://gray_appupstream;
 }
+...

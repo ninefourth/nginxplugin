@@ -170,9 +170,10 @@ static ngx_str_t str_ed=ngx_string(" }\n");
 char*
 ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str){
     char *s;
-    s=ngx_palloc(pool,str->len);
+    s=ngx_palloc(pool,str->len+1);
     ngx_memcpy(s,str->data,str->len);
     s[str->len]='\0';
+    str->len++;
     return s;
 }
 

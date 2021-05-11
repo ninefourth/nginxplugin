@@ -33,6 +33,8 @@ ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len);
 ngx_int_t ngx_http_upstream_check_add_variable(ngx_conf_t *cf ,ngx_str_t * var_name);
 void ngx_preload_var_conf(ngx_str_t *var_name , ngx_str_t *conf);
 
+ngx_str_t *ngx_http_get_param_value(ngx_http_request_t *r , u_char *param , ngx_uint_t len , ngx_str_t *value);
+
 //ngx_uint_t ngx_is_test(ngx_str_t)
 #define NGX_TRUE                  1
 #define NGX_FALSE                 0

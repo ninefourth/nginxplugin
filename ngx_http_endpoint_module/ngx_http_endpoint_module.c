@@ -121,45 +121,6 @@ ngx_http_endpoint_parse_path(ngx_pool_t *pool, ngx_str_t *path)
 }
 
 
-static void
-ngx_http_get_param_value(ngx_http_request_t *r , u_char *param , ngx_uint_t len , ngx_str_t *value)
-{
-	ngx_uint_t i,j , k=0;
-	ngx_str_t *args = &r->args;
-
-	value->len=0;
-
-	if(args && args->len > len ){
-		for(i=0,j=0; i<args->len; i++){
-			if( k==2 ){
-				if( args->data[i] == '&'){
-					break;
-				}
-                value->len++;
-			}else if( k==1 || i==0 || args->data[i]=='&' ){
-				if(args->data[i]=='&') i++;
-				if(i >= args->len) break;
-				if(j == len && args->data[i] == '='){
-                    k=2;
-                    if(i < args->len-2){
-                        value->data = &args->data[++i];
-                        value->len = 1;
-                    }
-                    continue;
-				}
-				if(args->data[i] == param[j++]){
-					k=1;
-					continue;
-				}else{
-					k=0;
-					j=0;
-				}
-			}
-		}
-	}
-}
-
-
 static ngx_int_t
 ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 {

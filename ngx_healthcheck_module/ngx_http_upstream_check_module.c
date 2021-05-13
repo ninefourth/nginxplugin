@@ -839,15 +839,6 @@ static ngx_str_t zero=ngx_string("0");
 static ngx_str_t http_head=ngx_string("http_");
 static ngx_str_t http_arg=ngx_string("arg_");
 
-//custom variable for test and gray
-
-//costome variable $fortest and $forgray
-/*static ngx_http_variable_t  ngx_http_custom_vars[] = {
-    { ngx_string("fortest"), custom_variable_set_value, custom_variable_get_value, FORTEST, NGX_HTTP_VAR_CHANGEABLE, 0 },
-    { ngx_string("forgray"), custom_variable_set_value, custom_variable_get_value, FORGRAY, NGX_HTTP_VAR_CHANGEABLE, 0 },
-    ngx_http_null_variable
-};
-*/
 static ngx_http_variable_t  ngx_http_custom_var_default = {
     ngx_null_string, custom_variable_set_value, custom_variable_get_value, 0, NGX_HTTP_VAR_CHANGEABLE, 0
 };
@@ -987,9 +978,18 @@ void ngx_reload_var_conf(ngx_str_t *f , ngx_str_t *var_name /*ngx_int_t flag*/)
                                 	cpy_chars(items->var_items[i].var_name , buf+1 ,sz-2 ); //except '[' and ']'
                                 	items->var_items[i+1].var_name[0] = '\0';
                                 } else {
-                                	if (i >= 0 && i<var_list_max_count && *buf != '#' && j < var_hash_max_count){
-                                	    items->var_items[i].values_hash[j++] = ngx_chars_2_hash(buf,sz);
-                                	    items->var_items[i].values_hash[j] = 0;
+                                	if (i >= 0 && i<var_list_max_count && *buf != '#'){
+                                		if(j < var_hash_max_count){
+                                	        items->var_items[i].values_hash[j++] = ngx_chars_2_hash(buf,sz);
+                                	        items->var_items[i].values_hash[j] = 0;
+                                		} else {//if the count of values more than [var_list_max_count] ,then create new variable(same name) for more values
+                                			i++;
+                                			j = 0;
+                                			cpy_chars(items->var_items[i].var_name , items->var_items[i-1].var_name ,var_name_max_len );
+                                			items->var_items[i+1].var_name[0] = '\0';
+                                			items->var_items[i].values_hash[j++] = ngx_chars_2_hash(items->var_items[i].var_name,strlen((char*)items->var_items[i].var_name));
+                                			items->var_items[i].values_hash[j] = 0;
+                                		}
                                 	}
                                 }
                               tail:

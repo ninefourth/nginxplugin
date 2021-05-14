@@ -2,8 +2,8 @@
 
 ngx_addon_name=ngx_http_endpoint_module
 ngx_feature_path="$ngx_addon_dir"
-#ngx_feature_deps="$ngx_addon_dir/ngx_http_endpoint_module.h"
-ngx_feature_src="$ngx_addon_dir/ngx_http_endpoint_module.c"
+ngx_feature_deps="$ngx_addon_dir/ngx_http_endpoint_module.h  $ngx_addon_dir/../ngx_common/ngx_common_util.h"
+ngx_feature_src="$ngx_addon_dir/ngx_http_endpoint_module.c  $ngx_addon_dir/../ngx_common/ngx_common_util.c"
 
 have=NGX_HTTP_ENDPOINT . auto/have
 

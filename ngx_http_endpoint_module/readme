@@ -71,6 +71,14 @@ aa
 # - 匹配get地址中的参数a的值
 [arg_a]
 ab
+#"{}"内部的配置是与的关系
+{
+[host]
+www.fxscm.net.cn
+[arg_a]
+ab
+}
+
 
 #在nginx.conf文件中将需要灰度或测试的地方加入变量判断为1即可（变量名对应 $forgray 与 $fortest），如：
 ...

@@ -5,6 +5,7 @@
 #include <nginx.h>
 #include "ngx_http_upstream_check_module.h"
 
+#include "../ngx_common/ngx_common_util.h"
 
 #if (NGX_HTTP_UPSTREAM_XFDF_IP_HASH)
 #include "ngx_http_upstream_xfdf_ip_hash_module.h"
@@ -132,7 +133,7 @@ typedef struct {
 	//name of nginx variable
 	u_char                                   var_name[var_name_max_len];
 	//the value of nginx variable list
-	ngx_uint_t                               values_hash[var_hash_max_count];
+	ngx_uint_t                               values_hash[var_hash_max_count];//不保存名称而只使用哈希值是因为占用预留空间过大
 } ngx_variables_item;
 
 typedef struct {
@@ -829,8 +830,6 @@ static ngx_check_status_command_t ngx_check_status_commands[] =  {
     { ngx_null_string, NULL }
 };
 
-ngx_uint_t ngx_str_2_hash(ngx_str_t *s);
-
 static ngx_uint_t ngx_http_upstream_check_shm_generation = 0;
 static ngx_http_upstream_check_peers_t *check_peers_ctx = NULL;
 static ngx_str_t one=ngx_string("1");
@@ -842,41 +841,6 @@ static ngx_str_t http_arg=ngx_string("arg_");
 static ngx_http_variable_t  ngx_http_custom_var_default = {
     ngx_null_string, custom_variable_set_value, custom_variable_get_value, 0, NGX_HTTP_VAR_CHANGEABLE, 0
 };
-
-//ngx_str_t to a hash code
-ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size)
-{
-    ngx_uint_t i;
-    ngx_uint_t hash = 89;
-    for (i = 0; i < size; i++) {
-	    hash = (hash * 5051 + s[i]) % 987631;
-	}
-    return hash;
-}
-
-ngx_uint_t ngx_str_2_hash(ngx_str_t *s)
-{
-	return ngx_chars_2_hash(s->data,s->len);
-}
-
-
-void cpy_chars(u_char *des , u_char *sor , size_t size){
-	for(/*void*/ ; size-- >0; des++ ,sor++) {
-		*des = *sor;
-	}
-	*des='\0';
-}
-
-ngx_uint_t read_line(u_char *buf)
-{
-	ngx_uint_t size = 0;
-	u_char *pbuf = buf;
-	while( *pbuf != '\n' && *pbuf != '\0' ){
-		pbuf++;
-		size++;
-	}
-	return size;
-}
 
 ngx_variable *get_variable_by_hash(ngx_uint_t var_name_hash){
 	ngx_int_t i =0;
@@ -1069,112 +1033,6 @@ ngx_buf_t *ngx_list_var(ngx_pool_t *pool, ngx_str_t *var_name /*ngx_int_t flag*/
 	return buf;
 }
 
-
-ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len)
-{
-    while( len-- > 0 ){
-    	if( *des++ != *head++){
-    		return NGX_FALSE;
-    	}
-    }
-    return NGX_TRUE;
-}
-
-
-ngx_str_t *ngx_http_get_param_value(ngx_http_request_t *r , u_char *param , ngx_uint_t len , ngx_str_t *value)
-{
-	ngx_uint_t i,j , k=0;
-	ngx_str_t *args = &r->args;
-
-	value->len=0;
-
-	if(args && args->len > len ){
-		for(i=0,j=0; i<args->len; i++){
-			if( k==2 ){
-				if( args->data[i] == '&'){
-					break;
-				}
-                value->len++;
-			}else if( k==1 || i==0 || args->data[i]=='&' ){
-				if(args->data[i]=='&') i++;
-				if(i >= args->len) break;
-				if(j == len && args->data[i] == '='){
-                    k=2;
-//                    if(i < args->len-2){
-                        value->data = &args->data[++i];
-                        value->len = 1;
-//                    }
-                    continue;
-				}
-				if(args->data[i] == param[j++]){
-					k=1;
-					continue;
-				}else{
-					k=0;
-					j=0;
-				}
-			}
-		}
-	}
-	return value;
-}
-
-
-ngx_str_t *ngx_http_get_variable_head(ngx_http_request_t *r, u_char *name , size_t len){
-	size_t c ,i;
-	ngx_table_elt_t *header;
-	ngx_str_t s;
-    header = r->headers_in.headers.part.elts;
-    c = r->headers_in.headers.part.nelts;//get count of headers
-    for(i=0 ;len>0 && i<c; i++) {
-        s.data = header[i].lowcase_key;
-        s.len = header[i].key.len;
-        if ( s.len == len && ngx_strncmp( name, s.data, len ) == 0){
-            return &header[i].value ;
-        }
-    }
-    return NULL;
-}
-
-ngx_http_variable_value_t *ngx_http_get_variable_req(ngx_http_request_t *r, ngx_str_t *name)
-{
-    ngx_http_variable_t        *v;
-    ngx_http_core_main_conf_t  *cmcf;
-
-    ngx_uint_t                 i;
-
-	if (name->len == 0) {
-		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,"[ngx_http_get_variable]: invalid variable name : %V",name);
-		return NULL;
-	}
-
-	cmcf = ngx_http_get_module_main_conf(r, ngx_http_core_module);
-
-	v = cmcf->variables.elts;
-
-	if (v == NULL) {
-		ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,"[ngx_http_get_variable]: variables is NULL ");
-		return NULL;
-
-	} else {
-		for (i = 0; i < cmcf->variables.nelts; i++) {
-			if (name->len != v[i].name.len || ngx_strncasecmp(name->data, v[i].name.data, name->len) != 0)
-			{
-				continue;
-			}
-			if (v[i].get_handler && v[i].get_handler(r, &r->variables[i], v[i].data) == NGX_OK) {
-
-				if (v[i].flags & NGX_HTTP_VAR_NOCACHEABLE) {
-					r->variables[i].no_cacheable = 1;
-				}
-
-				return &r->variables[i];
-			}
-		}
-	}
-
-    return NULL;
-}
 
 
 static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_item_list *items , ngx_int_t all)
@@ -4294,25 +4152,7 @@ ngx_http_upstream_check_add_variable(ngx_conf_t *cf ,ngx_str_t * var_name)
 
     return NGX_OK;
 }
-/*
-static ngx_int_t
-ngx_http_upstream_check_add_variables(ngx_conf_t *cf)
-{
-    ngx_http_variable_t  *var, *v;
-    for (v = ngx_http_custom_vars; v->name.len; v++) {
-        var = ngx_http_add_variable(cf, &v->name, v->flags);
-	    if (var == NULL) {
-	        return NGX_ERROR;
-	    }
 
-	    var->set_handler = v->set_handler;
-	    var->get_handler = v->get_handler;
-	    var->data = v->data;
-	}
-
-    return NGX_OK;
-}
-*/
 
 static void *
 ngx_http_upstream_check_create_loc_conf(ngx_conf_t *cf)

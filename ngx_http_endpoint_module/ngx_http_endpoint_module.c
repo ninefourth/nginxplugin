@@ -3,6 +3,8 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#include "../ngx_common/ngx_common_util.h"
+
 #if (NGX_HTTP_UPSTREAM_XFDF_IP_HASH)
 #include "ngx_http_upstream_xfdf_ip_hash_module.h"
 #endif

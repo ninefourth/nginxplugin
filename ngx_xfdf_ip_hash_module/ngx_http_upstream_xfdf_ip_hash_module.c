@@ -23,6 +23,7 @@ xfdf_ip_hash指令只有一个参数：
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include "../ngx_common/ngx_common_util.h"
 
 #include "ngx_http_upstream_xfdf_ip_hash_module.h"
 
@@ -165,25 +166,6 @@ static ngx_str_t str_wt=ngx_string(" weight=");
 static ngx_str_t str_rt=ngx_string("\n");
 static ngx_str_t str_st=ngx_string(" {\n");
 static ngx_str_t str_ed=ngx_string(" }\n");
-
-
-char*
-ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str){
-    char *s;
-    s=ngx_palloc(pool,str->len+1);
-    ngx_memcpy(s,str->data,str->len);
-    s[str->len]='\0';
-    str->len++;
-    return s;
-}
-
-u_char*
-ngx_strcat(u_char* des , u_char* src , size_t len) {
-    ngx_memcpy(des, src, len);
-    des += len;
-    return des;
-}
-
 
 ngx_http_variable_t *
 ngx_http_get_variable_by_name(ngx_conf_t *cf, ngx_str_t *name)

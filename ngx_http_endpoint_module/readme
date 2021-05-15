@@ -71,6 +71,9 @@ aa
 # - 匹配get地址中的参数a的值
 [arg_a]
 ab
+# - post请求体里取a的值
+[body_a]
+aa
 #"{}"内部的配置是与的关系
 {
 [host]
@@ -78,6 +81,11 @@ www.fxscm.net.cn
 [arg_a]
 ab
 }
+#如果设定的值是传入的值中的一部分，则在最前加入 “split_,_” 其中的 "," 是指的分隔符,如：
+[split_,_proxy_add_x_forwarded_for]
+127.0.0.1
+意思是变量proxy_add_x_forwarded_for传入的值是以 "," 分隔的
+传入的值可能是 "127.0.0.1, 192.168.1.200"，则设定的值127.0.0.1属于值范围，变量为true
 
 
 #在nginx.conf文件中将需要灰度或测试的地方加入变量判断为1即可（变量名对应 $forgray 与 $fortest），如：

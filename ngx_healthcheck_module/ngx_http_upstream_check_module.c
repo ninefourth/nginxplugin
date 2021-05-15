@@ -837,6 +837,9 @@ static ngx_str_t zero=ngx_string("0");
 //static ngx_conf_t *check_conf = NULL ;
 static ngx_str_t http_head=ngx_string("http_");
 static ngx_str_t http_arg=ngx_string("arg_");
+static ngx_str_t http_uri=ngx_string("uri");
+static ngx_str_t http_body=ngx_string("body_");
+static ngx_str_t http_split=ngx_string("split_");
 
 static ngx_http_variable_t  ngx_http_custom_var_default = {
     ngx_null_string, custom_variable_set_value, custom_variable_get_value, 0, NGX_HTTP_VAR_CHANGEABLE, 0
@@ -1033,15 +1036,25 @@ ngx_buf_t *ngx_list_var(ngx_pool_t *pool, ngx_str_t *var_name /*ngx_int_t flag*/
 	return buf;
 }
 
-
+ngx_int_t
+int_in_ints(ngx_uint_t *array , ngx_uint_t value ,size_t len)
+{
+	while(len > 0) {
+		if(array[--len] == value){
+			return NGX_TRUE;
+		}
+	}
+	return NGX_FALSE;
+}
 
 static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_item_list *items , ngx_int_t all)
 {
-	ngx_str_t s,s_tmp;
+	ngx_str_t s,s_tmp ,s_token;
 	ngx_str_t *sh;
-	ngx_uint_t idx = 0;
+	ngx_uint_t *idx = NULL ;
 	ngx_http_variable_value_t *vl;
-	ngx_int_t i=0,j=0, fg,ret;
+	ngx_int_t i=0,j=0, fg,ret,sz=0;
+	u_char split_c ,*s_t;
 
 	fg= NGX_TRUE;
 	ret = NGX_FALSE;
@@ -1049,29 +1062,70 @@ static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_
 	while(fg && i<var_list_max_count && items->var_items[i].var_name[0]){
 		s.data = items->var_items[i].var_name;
 		s.len = strlen((char*)items->var_items[i].var_name);
-		if (s.len >= http_head.len && ngx_str_startwith( s.data, http_head.data, http_head.len) ) {
+
+		if (s.len > http_split.len+2 && ngx_str_startwith( s.data, http_split.data, http_split.len)
+		      && s.data[http_split.len+1]=='_' ){//split_,_
+			split_c = s.data[http_split.len];//delimiter
+			s.data += http_split.len+2;
+			s.len = s.len - http_split.len - 2 ;
+		} else {
+			split_c = 0;
+		}
+
+		s_tmp.len=0;
+		if (s.len >= http_head.len && ngx_str_startwith( s.data, http_head.data, http_head.len) ) {//$http_
 			sh = ngx_http_get_variable_head(r,s.data+http_head.len , s.len - http_head.len);
 			if(sh){
-				idx = ngx_str_2_hash(sh);
+				s_tmp.data = sh->data;
+				s_tmp.len = sh->len;
 			}
-		} else if (s.len >= http_arg.len && ngx_str_startwith( s.data, http_arg.data, http_arg.len) ) {
+		} else if (s.len >= http_arg.len && ngx_str_startwith( s.data, http_arg.data, http_arg.len) ) {//$arg_
 			s.data = s.data+http_arg.len;
 			s.len = s.len - http_arg.len;
-			s_tmp.len=0;
 			ngx_http_get_param_value(r,s.data,s.len, &s_tmp);
-			if(s_tmp.len>0){
-				idx = ngx_str_2_hash(&s_tmp);
-			}
+		} else if ( !ngx_strncmp(s.data, http_uri.data, http_uri.len) ){//uri
+			s_tmp.data = r->uri.data;
+			s_tmp.len = r->uri.len;
+		} else if (s.len >= http_body.len && ngx_str_startwith( s.data, http_body.data, http_body.len) ) {//post body
+			s.data = s.data + http_body.len;
+			s.len = s.len - http_body.len;
+			s_tmp.len=0;
+			ngx_http_get_post_param(r,s.data,s.len, &s_tmp);
 		} else {
 			vl = ngx_http_get_variable_req(r , &s);
 			if(vl){
-				idx = ngx_chars_2_hash(vl->data,vl->len);
+				s_tmp.data = vl->data;
+				s_tmp.len = vl->len;
+			}
+		}
+		if(s_tmp.len > 0){
+			if (split_c){
+				sz = ngx_str_find_chr_count(s_tmp.data , s_tmp.len ,split_c);
+				sz++;
+				idx = ngx_palloc(r->pool, sz*sizeof(ngx_uint_t));
+				sh=&s_tmp;
+				while( j < sz){
+					s_t = ngx_str_sch_next_trimtoken(sh->data ,sh->len ,split_c,&s_token);
+					if(s_token.len > 0){
+						idx[j]=ngx_str_2_hash(&s_token);
+						sh->len = sh->len - (s_t - sh->data) +1;
+						sh->data = s_t;
+						j++;
+					}else {
+						break;
+					}
+				}
+			} else {
+				sz=1;
+				idx = ngx_palloc(r->pool, sz*sizeof(ngx_uint_t));
+				idx[0]=ngx_str_2_hash(&s_tmp);
 			}
 		}
 		//
+		j = 0;
 		ret = NGX_FALSE;
-		while(j<var_hash_max_count && idx >0 && items->var_items[i].values_hash[j] > 0) {
-			if(items->var_items[i].values_hash[j++] == idx) {
+		while(j<var_hash_max_count && idx && items->var_items[i].values_hash[j] > 0) {
+			if (int_in_ints(idx,items->var_items[i].values_hash[j++],sz)){
 				if(all){
 				    fg = NGX_TRUE;
 				    ret = NGX_TRUE;

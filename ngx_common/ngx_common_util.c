@@ -1,6 +1,48 @@
 #include "ngx_common_util.h"
 
 
+ngx_uint_t ngx_str_find_chr_count(u_char *s ,size_t len , u_char c)
+{
+	ngx_uint_t sz = 0;
+	while( len >0 ){
+		sz = (s[--len] == c) ? sz+1 : sz ;
+	}
+	return sz;
+}
+
+u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *token)
+{
+	u_char *c_ret = 0;
+	u_char sched = 0;
+    ngx_uint_t count=0;
+    token->len = 0;
+    while(count<len){
+        if (*s == ' '){
+        	s++;
+        	count++;
+        	continue;
+        }
+        if(*s == c){
+        	s++;
+        	count++;
+        	sched = 1;
+        	continue;
+        }
+        if (sched){
+        	c_ret = s;
+        	break;
+        }
+        if(token->len == 0){
+        	token->data = s;
+        }
+    	token->len++ ;
+    	s++;
+    	count++;
+    }
+
+    return c_ret;
+}
+
 //ngx_str_t to a hash code
 ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size)
 {
@@ -47,12 +89,27 @@ ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len)
     return NGX_TRUE;
 }
 
+char*
+ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str){
+    char *s;
+    s=ngx_palloc(pool,str->len+1);
+    ngx_memcpy(s,str->data,str->len);
+    s[str->len]='\0';
+    str->len++;
+    return s;
+}
 
-ngx_str_t *ngx_http_get_param_value(ngx_http_request_t *r , u_char *param , ngx_uint_t len , ngx_str_t *value)
+u_char*
+ngx_strcat(u_char* des , u_char* src , size_t len) {
+    ngx_memcpy(des, src, len);
+    des += len;
+    return des;
+}
+
+
+ngx_str_t *ngx_get_param_value(ngx_str_t *args , u_char *param , ngx_uint_t len , ngx_str_t *value)
 {
 	ngx_uint_t i,j , k=0;
-	ngx_str_t *args = &r->args;
-
 	value->len=0;
 
 	if(args && args->len > len ){
@@ -84,6 +141,13 @@ ngx_str_t *ngx_http_get_param_value(ngx_http_request_t *r , u_char *param , ngx_
 		}
 	}
 	return value;
+}
+
+
+ngx_str_t *ngx_http_get_param_value(ngx_http_request_t *r , u_char *param , ngx_uint_t len , ngx_str_t *value)
+{
+	ngx_str_t *args = &r->args;
+    return ngx_get_param_value(args,param,len,value);
 }
 
 
@@ -144,20 +208,15 @@ ngx_http_variable_value_t *ngx_http_get_variable_req(ngx_http_request_t *r, ngx_
 }
 
 
+ngx_str_t *ngx_http_get_post_param(ngx_http_request_t *r, u_char *name , size_t len ,ngx_str_t *value)
+{
+	ngx_str_t args;
 
-char*
-ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str){
-    char *s;
-    s=ngx_palloc(pool,str->len+1);
-    ngx_memcpy(s,str->data,str->len);
-    s[str->len]='\0';
-    str->len++;
-    return s;
-}
-
-u_char*
-ngx_strcat(u_char* des , u_char* src , size_t len) {
-    ngx_memcpy(des, src, len);
-    des += len;
-    return des;
+	if(r->header_in){
+		args.data = r->header_in->pos;
+		args.len = r->header_in->last - r->header_in->pos;
+		ngx_get_param_value(&args,name,len,value);
+		return value;
+	}
+    return NULL;
 }

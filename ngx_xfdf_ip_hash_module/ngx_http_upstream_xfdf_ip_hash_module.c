@@ -360,7 +360,7 @@ ngx_xfdf_list_upstreams()
                 buf += wtlen;
                 buf = ngx_strcat(buf ,str_dn.data ,str_dn.len );
                 #if (NGX_HTTP_UPSTREAM_CHECK)
-                    ngx_sprintf(buf,"%ui", ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer) );
+                    ngx_sprintf(buf,"%ui", ups[i].peers[j].peer->down ? ups[i].peers[j].peer->down : ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer) );
                 #else
                     ngx_sprintf(buf,"%ui",ups[i].peers[j].peer->down);
                 #endif

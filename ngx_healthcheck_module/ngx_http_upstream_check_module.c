@@ -1628,6 +1628,11 @@ ngx_http_upstream_check_begin_handler(ngx_event_t *event)
         return;
     }
 
+    //when force down the peer , don't check
+    if( peer->shm->force_down ){
+    	return;
+    }
+
     interval = ngx_current_msec - peer->shm->access_time;
     ngx_log_debug5(NGX_LOG_DEBUG_HTTP, event->log, 0,
                    "http check begin handler index: %ui, owner: %P, "

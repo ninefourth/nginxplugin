@@ -25,3 +25,9 @@ ngx_str_t *ngx_http_get_variable_head(ngx_http_request_t *r, u_char *name , size
 ngx_http_variable_value_t *ngx_http_get_variable_req(ngx_http_request_t *r, ngx_str_t *name);
 ngx_str_t *ngx_http_get_post_param(ngx_http_request_t *r, u_char *name , size_t len ,ngx_str_t *value);
 ngx_str_t *ngx_get_param_value(ngx_str_t *args , u_char *param , ngx_uint_t len , ngx_str_t *value);
+
+//net
+ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr);
+
+//math
+ngx_int_t ngx_math_log2(ngx_int_t x);

@@ -107,3 +107,12 @@ if ( $forgray = 1 ){
     set $psurl http://gray_appupstream;
 }
 ...
+
+五.手动禁掉用户ip
+#禁掉192.168.0.0/16网段所有ip
+http://localhost:8100/address/deny?ip=192.168.0.0/16
+#打开被禁的ip
+http://localhost:8100/address/allow?ip=192.168.0.0/16
+#查看被禁掉的ip
+http://localhost:8100/address/deny/list
+

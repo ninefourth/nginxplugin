@@ -123,6 +123,17 @@ ngx_http_endpoint_parse_path(ngx_pool_t *pool, ngx_str_t *path)
 }
 
 
+ngx_buf_t *
+append_printf(ngx_pool_t* pool, ngx_str_t *s)
+{
+	ngx_buf_t                  *buf = NULL;
+	buf = ngx_create_temp_buf(pool, s->len);
+    if (buf != NULL) {
+	    buf->last = ngx_sprintf(buf->last, "%V\n", s);
+	}
+    return buf;
+}
+
 static ngx_int_t
 ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 {
@@ -131,7 +142,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     ngx_chain_t                out;
     ngx_str_t                  *con;
     ngx_str_t                  *value;
-    ngx_str_t                  arg_cf=ngx_string("conf");
+    ngx_str_t                  arg_cf=ngx_string("conf") , ip = ngx_string("ip");
 
     rc = ngx_http_discard_request_body(r);
     if (rc != NGX_OK) {
@@ -150,30 +161,21 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     if (value[0].len == 4 && ngx_strncasecmp(value[0].data, (u_char *)"list", 4) == 0) {
         con = ngx_xfdf_list_upstreams();
         if (con != NULL) {
-            buf = ngx_create_temp_buf(r->pool, con->len);
-            if (buf != NULL) {
-                buf->last = ngx_sprintf(buf->last, "%V\n", con);
-            }
+        	buf = append_printf(r->pool, &sucs);
         }
     } else if(value[0].len == 4 && ngx_strncasecmp(value[0].data, (u_char *)"down", 4) == 0) {
         if( resource->nelts == 3  ){
             ngx_str_t *up = &value[1]; //upstream
             ngx_str_t *sr = &value[2]; //server
             ngx_xfdf_deal_server(up,sr,1);
-            buf = ngx_create_temp_buf(r->pool, sucs.len);
-            if (buf != NULL) {
-                buf->last = ngx_sprintf(buf->last, "%V\n", &sucs );
-            }
+            buf = append_printf(r->pool, &sucs);
         }
         if( resource->nelts == 4  ) {
             ngx_str_t *up = &value[1]; //upstream
             ngx_str_t *sr = &value[2]; //server
             if(ngx_strncasecmp(value[3].data, (u_char *)"log", 3) == 0) {
                 ngx_xfdf_deal_server(up,sr,2);
-                buf = ngx_create_temp_buf(r->pool, sucs.len);
-                if (buf != NULL) {
-                    buf->last = ngx_sprintf(buf->last, "%V\n", &sucs );
-                }
+                buf = append_printf(r->pool, &sucs);
             }
         }
     } else if(value[0].len == 2 && ngx_strncasecmp(value[0].data, (u_char *)"up", 2) == 0) {
@@ -181,10 +183,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
             ngx_str_t *up = &value[1]; //upstream
             ngx_str_t *sr = &value[2]; //server
             ngx_xfdf_deal_server(up,sr,0);
-            buf = ngx_create_temp_buf(r->pool, sucs.len);
-            if (buf != NULL) {
-                buf->last = ngx_sprintf(buf->last, "%V\n", &sucs);
-            }
+            buf = append_printf(r->pool, &sucs);
         }
     } else if(value[0].len == 6 && ngx_strncasecmp(value[0].data, (u_char *)"weight", 6) == 0) {
         if( resource->nelts == 4  ){
@@ -193,10 +192,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
             ngx_str_t *wt = &value[3]; //weight
             ngx_uint_t w = ngx_atoi(wt->data, wt->len);
             ngx_xfdf_deal_peer_weight(up,sr,w);
-            buf = ngx_create_temp_buf(r->pool, sucs.len);
-            if (buf != NULL) {
-                buf->last = ngx_sprintf(buf->last, "%V\n", &sucs);
-            }
+            buf = append_printf(r->pool, &sucs);
         }
     } else if (value[0].len == 9 && ngx_strncasecmp(value[0].data, (u_char *)"variables", 9) == 0 ) {
     	if( resource->nelts == 2 ){
@@ -206,14 +202,34 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
         	if(f.len >0 ){
     			f.data = (u_char*)ngx_strcpy(r->pool,&f);
     			ngx_reload_var_conf(&f,varname);
-    			buf = ngx_create_temp_buf(r->pool, sucs.len);
-    			if (buf != NULL) {
-    				buf->last = ngx_sprintf(buf->last, "%V\n", &sucs );
-    			}
+    			buf = append_printf(r->pool, &sucs);
         	}
     	}else if( resource->nelts == 3 &&  value[2].len == 4 && ngx_strncasecmp(value[2].data, (u_char *)"list", 4) == 0){
     		ngx_str_t *varname = &value[1]; //variable name
         	buf = ngx_list_var(r->pool,varname);
+    	}
+    } else if (value[0].len == 7 && ngx_strncasecmp(value[0].data, (u_char *)"address", 7) == 0 ) {
+    	if( resource->nelts == 2  ){
+    	    ngx_str_t address;
+			ngx_http_get_param_value(r,ip.data , ip.len , &address);
+			if(address.len > 0){
+				ngx_str_t *opt = &value[1];//deny or allow
+				if (ngx_strncasecmp(opt->data, (u_char *)"deny", 4) == 0){
+					ngx_http_add_address_rule(r,&address,1);
+				} else if (ngx_strncasecmp(opt->data, (u_char *)"allow", 5) == 0){
+					ngx_http_add_address_rule(r,&address,0);
+				}
+				buf = append_printf(r->pool, &sucs);
+			}
+    	} else if( resource->nelts == 3  ){
+    		if (ngx_strncasecmp(value[1].data, (u_char *)"deny", 4) == 0){
+				if (ngx_strncasecmp(value[2].data, (u_char *)"list", 4) == 0){
+					con = ngx_http_deny_list(r->pool);
+					if (con != NULL) {
+						buf = append_printf(r->pool, con);
+					}
+				}
+    		}
     	}
     }
 

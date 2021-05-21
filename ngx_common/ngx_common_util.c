@@ -220,3 +220,28 @@ ngx_str_t *ngx_http_get_post_param(ngx_http_request_t *r, u_char *name , size_t 
 	}
     return NULL;
 }
+
+ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr)
+{
+	struct in_addr h_addr;
+	char *s;
+	h_addr.s_addr = naddr;
+	s = inet_ntoa(h_addr);
+	saddr->data = (u_char*)s;
+	saddr->len = strlen(s);
+	return saddr;
+}
+
+
+ngx_int_t ngx_math_log2(ngx_int_t x)
+{
+    float fx;
+    ngx_int_t ix, exp;
+
+    fx = (float)x;
+    ix = *(ngx_int_t*)&fx;
+    exp = (ix >> 23) & 0xff;//the bits of exponent
+
+    return exp - 126;
+}
+

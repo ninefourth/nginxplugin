@@ -128,6 +128,7 @@ typedef struct {
 #define    var_hash_max_count    50
 #define    var_list_max_count    20
 #define    var_group_max_count   20
+#define    var_max_access_ip    50
 
 typedef struct {
 	//name of nginx variable
@@ -150,6 +151,11 @@ typedef struct {// a user variable point to a nginx variable list
 	ngx_variables_item_list                  variable_group[var_group_max_count];
 } ngx_variable ;
 
+typedef struct {
+    in_addr_t         mask;
+    in_addr_t         addr;
+    ngx_uint_t        deny;      /* unsigned  deny:1; */
+} ngx_http_access_rule_t;
 
 typedef struct {
     ngx_uint_t                               generation;
@@ -157,6 +163,9 @@ typedef struct {
     ngx_uint_t                               number;
     //how many user variables
     ngx_variable                            vars[var_max_count];
+
+    //deny or allow ips
+    ngx_http_access_rule_t                  ips[var_max_access_ip];
 
     /* ngx_http_upstream_check_status_peer_t */
     ngx_http_upstream_check_peer_shm_t       peers[1];
@@ -524,8 +533,7 @@ static char *ngx_http_upstream_check_init_srv_conf(ngx_conf_t *cf, void *conf);
 static void *ngx_http_upstream_check_create_loc_conf(ngx_conf_t *cf);
 static char * ngx_http_upstream_check_merge_loc_conf(ngx_conf_t *cf,
     void *parent, void *child);
-//static ngx_int_t
-//ngx_http_upstream_check_add_variables(ngx_conf_t *cf);
+static ngx_int_t ngx_http_upstream_modify_conf(ngx_conf_t *cf);
 
 #define SHM_NAME_LEN 256
 
@@ -619,8 +627,8 @@ static ngx_command_t  ngx_http_upstream_check_commands[] = {
 
 
 static ngx_http_module_t  ngx_http_upstream_check_module_ctx = {
-    NULL,//ngx_http_upstream_check_add_variables,   /* preconfiguration */
-    NULL,                                    /* postconfiguration */
+    NULL,                                     /* preconfiguration */
+	ngx_http_upstream_modify_conf,                                    /* postconfiguration */
 
     ngx_http_upstream_check_create_main_conf,/* create main configuration */
     ngx_http_upstream_check_init_main_conf,  /* init main configuration */
@@ -4563,6 +4571,10 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
 				}
 			}
 		}
+		//
+		if ( opeers_shm->ips[0].addr){
+			memcpy( &peers_shm->ips , &opeers_shm->ips, sizeof(opeers_shm->ips));
+		}
 	}
 
 
@@ -4722,4 +4734,151 @@ ngx_http_upstream_check_init_process(ngx_cycle_t *cycle)
     }
 
     return ngx_http_upstream_check_add_timers(cycle);
+}
+
+
+void
+ngx_http_add_address_rule(ngx_http_request_t *r ,ngx_str_t *address , ngx_uint_t deny)
+{
+    ngx_cidr_t                  cidr;
+    ngx_int_t                   rc, flag=NGX_FALSE;
+    ngx_http_access_rule_t      *deny_ips;
+    size_t    i;
+	struct sockaddr_in *sin;
+
+    if(check_peers_ctx) {
+		rc = ngx_ptocidr(address, &cidr);
+	    if (rc == NGX_OK) {
+	        if ( cidr.family == AF_INET ) {
+				sin = (struct sockaddr_in *) r->connection->sockaddr;
+				//the deny ip must not current client ip
+				if ( (sin->sin_addr.s_addr & cidr.u.in.mask) == cidr.u.in.addr ) {
+					return ;
+				}
+	        	//
+	        	deny_ips = check_peers_ctx->peers_shm->ips;
+	        	for(i = 0;i< var_max_access_ip ;i++){
+	        		if(deny_ips[i].addr == 0 && deny && !flag) {
+	        			deny_ips[i].mask = cidr.u.in.mask;
+	        			deny_ips[i].addr = cidr.u.in.addr;
+	        			deny_ips[i].deny = deny;
+	        			flag = NGX_TRUE;
+	        		}else if ( deny_ips[i].addr == cidr.u.in.addr &&  deny_ips[i].mask == cidr.u.in.mask){
+	        			if(!deny){
+	        				deny_ips[i].addr = 0;
+	        			}
+	        			break;
+	        		}
+	        	}
+			}
+		}
+    }
+}
+
+
+static ngx_int_t
+ngx_http_access_handler(ngx_http_request_t *r)
+{
+	struct sockaddr_in          *sin;
+	size_t   i;
+    ngx_http_access_rule_t      *deny_ips;
+
+	if(r->connection->sockaddr->sa_family == AF_INET) {
+		if(check_peers_ctx) {
+			sin = (struct sockaddr_in *) r->connection->sockaddr;
+			deny_ips = check_peers_ctx->peers_shm->ips;
+			for(i = 0;i< var_max_access_ip ;i++){
+				if(deny_ips[i].addr){
+					if ((sin->sin_addr.s_addr & deny_ips[i].mask) == deny_ips[i].addr) {
+						return NGX_HTTP_FORBIDDEN;
+					}
+				}
+			}
+		}
+	}
+    return NGX_DECLINED;
+}
+
+
+static ngx_int_t
+ngx_http_upstream_modify_conf(ngx_conf_t *cf)
+{
+	ngx_http_handler_pt        *h;
+    ngx_http_core_main_conf_t  *cmcf;
+
+	cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+
+    h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+    if (h == NULL) {
+        return NGX_ERROR;
+    }
+    *h = ngx_http_access_handler;
+
+    return NGX_OK;
+}
+
+ngx_str_t*
+ngx_http_deny_list(ngx_pool_t *pool)
+{
+    ngx_str_t *str ,ip;
+    size_t i,buf_size = 0 ;
+    ngx_http_access_rule_t      *deny_ips;
+    u_char *b;
+    size_t ip_len = 18;//xxx.xxx.xxx.xxx/xx
+    uint32_t m ;
+
+    str = ngx_palloc(pool, sizeof(ngx_str_t));
+    str->len = 0;
+    str->data = NULL;
+
+    if(check_peers_ctx) {
+    	deny_ips = check_peers_ctx->peers_shm->ips;
+    	for(i = 0;i< var_max_access_ip ;i++){
+			if(deny_ips[i].addr){
+				buf_size+= ip_len+1; //\n
+			}
+    	}
+    	if(buf_size == 0) {
+    		return NULL;
+    	}
+    	b = str->data = ngx_palloc(pool, buf_size);
+    	ip.data = ngx_palloc(pool, ip_len+1);
+    	for(i = 0;i< var_max_access_ip ;i++){
+			if(deny_ips[i].addr){
+			    ngx_inet_ntoa(deny_ips[i].addr , &ip);
+			    b = ngx_strcat(b,ip.data,ip.len);
+			    str->len += ip.len;
+			    /*
+			     * Formula:
+			     * htonl((uint32_t) (0xffffffffu << (32 - shift)));
+			     * if "shift" equals 24 ,the resualt is 24 "1"s  is 111111111111111111111111
+			     * this formula as same as 2^24-1
+			     * */
+			    if(deny_ips[i].mask < 0xffffffff){ //
+				    *b = '/';
+				    b+=1;
+				    m = deny_ips[i].mask;
+				    m = ngx_math_log2(m);
+
+/*				    u_char *ms;
+				    ms = (u_char*)(&deny_ips[i].addr);
+				    printf(" -1--------- %d %d %d %d- \n",ms[0],ms[1],ms[2],ms[3]);
+*/
+				    /*m = ntohl(deny_ips[i].mask);
+				    m = ~(m/deny_ips[i].mask);
+				    m = 32 - m/0xffffffff/2;
+				    m = (m >> 23) & 0xff;
+				    m -= 127;*/
+			    	ngx_sprintf(b,"%ui",m);
+			    	b+=2;
+			    	str->len+=3;
+			    }
+			    *b = '\n';
+			    b+=1;
+			    str->len += 1;
+			}
+		}
+    }
+
+    return str;
 }

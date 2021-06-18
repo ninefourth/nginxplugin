@@ -5,6 +5,43 @@
 #define NGX_TRUE                  1
 #define NGX_FALSE                 0
 
+/* binary tree */
+typedef struct ngx_binary_tree_node_s ngx_binary_tree_node_t;
+typedef ngx_int_t (*ngx_binary_tree_node_compare) (ngx_binary_tree_node_t *node1 , ngx_binary_tree_node_t *node2);
+struct ngx_binary_tree_node_s {
+	ngx_int_t     parent; //parent node ,offset from root
+	void				  *data;
+	ngx_int_t     left;   //left node ,offset from root
+	ngx_int_t     right;  //right node ,offset from root
+} ;
+ngx_binary_tree_node_t *ngx_init_binary_tree(ngx_binary_tree_node_t *root);
+ngx_binary_tree_node_t *ngx_binary_tree_add_node(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *node ,ngx_binary_tree_node_compare cb);
+ngx_binary_tree_node_t *ngx_binary_tree_find(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *data ,ngx_binary_tree_node_compare cb);
+/* */
+
+/* link */
+typedef struct ngx_link_item_s ngx_link_item_t;
+
+typedef ngx_int_t (*ngx_link_item_compare) (ngx_link_item_t *newitem , ngx_link_item_t *olditem);
+
+struct ngx_link_item_s{
+	ngx_link_item_t        *first;
+	ngx_link_item_t		*prev;
+	void					*data;
+	ngx_link_item_t		*next;
+	ngx_link_item_t        *last;
+} ;
+
+typedef struct {
+	ngx_link_item_t        *first;
+	ngx_link_item_t        *last;
+	size_t                size;
+} ngx_link_t ;
+ngx_link_t *ngx_link_init_link(ngx_link_t *link);
+ngx_link_item_t *ngx_link_add_item(ngx_link_t *link ,ngx_link_item_t *data, ngx_link_item_compare cb);
+ngx_link_item_t *ngx_link_find_item(ngx_link_t *link ,ngx_link_item_t *data , ngx_link_item_compare cb);
+/*  */
+
 /*string function*/
 ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size);
 ngx_uint_t ngx_str_2_hash(ngx_str_t *s);
@@ -15,6 +52,7 @@ ngx_uint_t read_line(u_char *buf);
 ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len);
 ngx_uint_t ngx_str_find_chr_count(u_char *s ,size_t len , u_char c);
 u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *token);
+size_t ngx_num_bit_count(ngx_int_t num);
 
 /*http request function*/
 //get http url parameter

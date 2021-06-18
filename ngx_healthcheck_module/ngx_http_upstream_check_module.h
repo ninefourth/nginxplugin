@@ -32,6 +32,14 @@ void ngx_preload_var_conf(ngx_str_t *var_name , ngx_str_t *conf);
 void ngx_http_add_address_rule(ngx_http_request_t *r ,ngx_str_t *address , ngx_uint_t deny);
 ngx_str_t *ngx_http_deny_list(ngx_pool_t *pool);
 
+void ngx_reload_region_conf(ngx_str_t *f , ngx_uint_t up_name_hash);
+ngx_uint_t ngx_http_upstream_get_peer_region(void *p);
+
+ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r);
+ngx_int_t ngx_http_upstream_get_region_total_weight(void *fstp , ngx_uint_t region);
+void ngx_reload_router(ngx_str_t *name , ngx_str_t *cnf);
+void ngx_add_router_item(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_str_t *key ,ngx_uint_t region);
+void ngx_set_router_variable(ngx_str_t *router_name , ngx_str_t *var);
 
 #endif //_NGX_HTTP_UPSTREAM_CHECK_MODELE_H_INCLUDED_
 

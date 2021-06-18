@@ -116,3 +116,39 @@ http://localhost:8100/address/allow?ip=192.168.0.0/16
 #查看被禁掉的ip
 http://localhost:8100/address/deny/list
 
+六.upstream中server分区(region)，访问路由到对应region
+#定义分区
+upstream {
+...
+region conf/include/region.conf;
+...
+}
+#conf/include/region.conf文件内容如下：[#]分区号必须为数字且不能重复，不要置0,0代表不分区
+[1]
+172.17.95.133:8080
+172.17.95.134:8080
+[2]
+172.17.98.219:8080
+...
+#定义访问路由规则
+location /cldpoint/ {
+...
+router [name] conf/include/router.conf;
+...
+}
+#[name]是router起的唯一名,必填
+#conf/include/router.conf文件内容如下：
+[#]是nginx变量用于取关键字, 下面的取值第一列为[#]变量中得到的值，第二列为所属分区，0代表不分区
+[$host]
+www.fxscm.net   0
+zzjdl.fxscm.net 0
+fzy.sm7.fxscm.net   1
+
+#重置upstream分区
+http://localhost:8100/region/[upstream]?conf=conf/include/region.cnf
+#重置访问路由规则
+http://localhost:8100/rounter/[name]?conf=conf/include/router.cnf
+#给指定路由规则添加项目
+http://localhost:8100/rounter/[name]/add/[key]/[value]
+#给指定路由规则更换路由规则变量
+http://localhost:8100/rounter/[name]/add/[variable]

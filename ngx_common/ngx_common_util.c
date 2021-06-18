@@ -15,14 +15,20 @@ u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t 
 	u_char *c_ret = 0;
 	u_char sched = 0;
     ngx_uint_t count=0;
+    u_char tmp_c;
     token->len = 0;
-    while(count<len){
-        if (*s == ' '){
+    if(c == '\t') {
+    	c = ' ';
+    }
+    while( count<len && s != NULL) {
+    	tmp_c = *s;
+    	if(tmp_c == '\t') tmp_c=' ';
+        if (tmp_c == ' ' && c != ' '){
         	s++;
         	count++;
         	continue;
         }
-        if(*s == c){
+        if(tmp_c == c){
         	s++;
         	count++;
         	sched = 1;
@@ -245,3 +251,129 @@ ngx_int_t ngx_math_log2(ngx_int_t x)
     return exp - 126;
 }
 
+size_t ngx_num_bit_count(ngx_int_t num)
+{
+	size_t c = 1;
+	while( (num /= 10) != 0 ) {
+		c++;
+	}
+	return c;
+}
+
+ngx_link_t *ngx_link_init_link(ngx_link_t *link)
+{
+	link->last = link->first = NULL;
+	link->size = 0;
+	return link;
+}
+
+ngx_link_item_t *ngx_link_add_item(ngx_link_t *link ,ngx_link_item_t *data, ngx_link_item_compare cb)
+{
+	ngx_link_item_t *item ;
+	size_t     i = 0;
+	if(link->size == 0){
+		link->first = link->last = data;
+		link->size++;
+		data->first = data->last = data;
+		data->next = data->prev = NULL;
+	} else {
+		item = link->first;
+		while(i++ < link->size) {
+			if(cb(data,item) <0) {
+				break;
+			}
+			item = item->next;
+		}
+		data->prev = item->prev;
+		data->next = item;
+		if(item->prev != NULL) {
+			item->prev->next = data;
+		} else {
+			link->first = data;
+		}
+		item->prev = data;
+		if(i == link->size){
+			link->last = data;
+		}
+		link->size++;
+	}
+	return data;
+}
+
+ngx_link_item_t *ngx_link_find_item(ngx_link_t *link ,ngx_link_item_t *data , ngx_link_item_compare cb)
+{
+	ngx_link_item_t *item ;
+	size_t     i = 0;
+
+	item = link->first;
+	while(i++ < link->size) {
+		if(cb(data,item) == 0) {
+			return item;
+		}
+		item = item->next;
+	}
+	return NULL;
+}
+
+/** binary_tree **/
+ngx_binary_tree_node_t *ngx_init_binary_tree(ngx_binary_tree_node_t *root)
+{
+	root->data = NULL;
+	root->left = root->right = root->parent = 0;
+	return root;
+}
+
+ngx_binary_tree_node_t *pri_ngx_binary_tree_add_node(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *parent , ngx_binary_tree_node_t *node ,ngx_binary_tree_node_compare cb)
+{
+	ngx_binary_tree_node_t *current_node = parent ;
+	ngx_int_t *offset;
+	ngx_int_t i = cb(current_node,node);
+	if( i >0 ){
+		offset = &current_node->left;
+	}else if(i <0) {
+		offset = &current_node->right ;
+	} else {
+		current_node->data = node->data ;
+		return current_node;
+	}
+	if (*offset == 0){
+		node->parent = parent - root ;
+		*offset = node - root;
+	} else {
+		pri_ngx_binary_tree_add_node(root , root+(*offset) , node ,cb);
+	}
+	return node;
+}
+
+ngx_binary_tree_node_t *ngx_binary_tree_add_node(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *node ,ngx_binary_tree_node_compare cb)
+{
+	return pri_ngx_binary_tree_add_node(root,root,node,cb);
+}
+
+ngx_binary_tree_node_t *pri_ngx_binary_tree_find(ngx_binary_tree_node_t *root ,ngx_binary_tree_node_t *parent , ngx_binary_tree_node_t *data ,ngx_binary_tree_node_compare cb)
+{
+	ngx_binary_tree_node_t *current_node = parent , *patch;
+	ngx_int_t i = cb(current_node,data);
+
+	if( i >0 ){
+		patch = root+current_node->left;
+	}else if(i < 0) {
+		patch = root+current_node->right ;
+	} else {
+		return current_node;
+	}
+
+	if (patch == root){
+		current_node = NULL;
+	} else {
+		current_node = pri_ngx_binary_tree_find(root ,patch , data ,cb);
+	}
+	return current_node;
+}
+
+ngx_binary_tree_node_t *ngx_binary_tree_find(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *data ,ngx_binary_tree_node_compare cb)
+{
+	return pri_ngx_binary_tree_find(root ,root,data,cb);
+}
+
+/** **/

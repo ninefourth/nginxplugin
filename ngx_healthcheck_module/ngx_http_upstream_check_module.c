@@ -69,9 +69,36 @@ typedef struct {
     size_t                                   length;
 } ngx_http_upstream_check_ctx_t;
 
+#define upstream_region_count 20
+typedef struct {
+	ngx_uint_t      upstream_hash;
+	ngx_str_t       conf;
+} upstream_region_conf_t ;
+
+struct {
+	upstream_region_conf_t          up_region_cnf[upstream_region_count];
+	ngx_uint_t                    count;
+} up_region_cnfs;
+
+#define key_region_count 20000
+#define key_region_key 1000
+/*typedef struct {
+	ngx_binary_tree_node_t    node; //data = &key_region_conf_t
+	ngx_uint_t      key_hash;
+	ngx_uint_t      region;
+} key_region_conf_t ;*/
+
+typedef struct  {
+//	key_region_conf_t          key_regions[key_region_count]; //1st node is root
+	ngx_binary_tree_node_t      key_regions[key_region_count]; //1st node is root; data is key_hash*1000+region
+	u_char                   variable[40];
+	ngx_uint_t                    count;
+	ngx_uint_t                rounter_name_hash;
+} key_region_confs_t ;
+
 #define var_max_count  20
 
-struct vars_hash_t{
+struct {
     ngx_uint_t name_hash[var_max_count] ;
     ngx_uint_t count ;
 } vars_hash ;
@@ -81,7 +108,7 @@ typedef struct {
     ngx_str_t  f_conf ;
 } var_hash_conf_t;
 
-struct vars_hash_conf_t{
+struct {
 	var_hash_conf_t                          v_fs[var_max_count];
     ngx_uint_t                               count ;
 } vars_hash_conf;
@@ -120,6 +147,8 @@ typedef struct {
     ngx_atomic_i_t                           v_total_weight;
     //upstream name in hash code
     ngx_uint_t                                upstream_name;
+    //the server in which region
+    ngx_uint_t                                region;
 
 } ngx_http_upstream_check_peer_shm_t;
 
@@ -129,6 +158,7 @@ typedef struct {
 #define    var_list_max_count    20
 #define    var_group_max_count   20
 #define    var_max_access_ip    50
+#define    var_key_region_max_count 20
 
 typedef struct {
 	//name of nginx variable
@@ -166,6 +196,8 @@ typedef struct {
 
     //deny or allow ips
     ngx_http_access_rule_t                  ips[var_max_access_ip];
+
+    key_region_confs_t                     key_region[var_key_region_max_count];
 
     /* ngx_http_upstream_check_status_peer_t */
     ngx_http_upstream_check_peer_shm_t       peers[1];
@@ -218,7 +250,7 @@ struct ngx_http_upstream_check_peer_s {
 typedef struct {
     ngx_str_t                                check_shm_name;
     ngx_uint_t                               checksum;
-    ngx_array_t                              peers;
+    ngx_array_t                              peers; //ngx_http_upstream_check_peer_t
 
     ngx_http_upstream_check_peers_shm_t     *peers_shm;
 } ngx_http_upstream_check_peers_t;
@@ -315,13 +347,25 @@ struct ngx_http_upstream_check_srv_conf_s {
     
     //by zgk , directive check is valid
     ngx_uint_t                              check_cmd_on;
+
+    ngx_str_t                               type;
+    ngx_str_t                               type_name;
 };
 
 
 typedef struct {
     ngx_check_status_conf_t                 *format;
+    ngx_str_t                             type_name;
+
+	ngx_str_t                             conf;
+    key_region_confs_t                     *shm_key_region_confs;
+    ngx_str_t                             rounter_name;
 } ngx_http_upstream_check_loc_conf_t;
 
+typedef struct {
+	ngx_http_upstream_check_loc_conf_t        *loc_confs[100];
+    ngx_uint_t                             count;
+} ngx_http_upstream_check_loc_confs_t;
 
 typedef struct {
     u_char  version;
@@ -509,6 +553,10 @@ static char *ngx_http_upstream_check_keepalive_requests(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
 static char *ngx_http_upstream_check_http_send(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
+static char *ngx_http_upstream_region(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf);
+static char *ngx_http_location_router(ngx_conf_t *cf,
+    ngx_command_t *cmd, void *conf);
 static char *ngx_http_upstream_check_http_expect_alive(ngx_conf_t *cf,
     ngx_command_t *cmd, void *conf);
 
@@ -621,6 +669,20 @@ static ngx_command_t  ngx_http_upstream_check_commands[] = {
       0,
       0,
       NULL },
+
+	 { ngx_string("region"),
+	   NGX_HTTP_UPS_CONF|NGX_CONF_TAKE1,
+	   ngx_http_upstream_region,
+	   0,
+	   0,
+	   NULL },
+
+	 { ngx_string("router"),
+		NGX_HTTP_LOC_CONF|NGX_CONF_TAKE12,
+		ngx_http_location_router,
+		0,
+		0,
+		NULL },
 
       ngx_null_command
 };
@@ -840,6 +902,7 @@ static ngx_check_status_command_t ngx_check_status_commands[] =  {
 
 static ngx_uint_t ngx_http_upstream_check_shm_generation = 0;
 static ngx_http_upstream_check_peers_t *check_peers_ctx = NULL;
+static ngx_http_upstream_check_loc_confs_t loc_cnfs;
 static ngx_str_t one=ngx_string("1");
 static ngx_str_t zero=ngx_string("0");
 //static ngx_conf_t *check_conf = NULL ;
@@ -864,6 +927,25 @@ ngx_variable *get_variable_by_hash(ngx_uint_t var_name_hash){
 	}
 	vars[i].var_name_hash = var_name_hash ;
 	return &vars[i];
+}
+
+key_region_confs_t *get_key_region_confs(ngx_http_upstream_check_loc_conf_t *cnf)
+{
+	ngx_int_t i =0;
+	key_region_confs_t *cfs = check_peers_ctx->peers_shm->key_region;
+	while( i<var_key_region_max_count ){
+		if(cnf->shm_key_region_confs == NULL && cfs[i].count == 0) {
+			cnf->shm_key_region_confs = &cfs[i];
+			break;
+		}
+		if( cfs[i].count >0 && &cfs[i] == cnf->shm_key_region_confs){
+			break;
+		}
+		i++;
+	}
+	cnf->shm_key_region_confs->rounter_name_hash = ngx_str_2_hash(&cnf->rounter_name);
+	return cnf->shm_key_region_confs;
+
 }
 
 ngx_variable *get_variable_by_name(ngx_str_t *var_name){
@@ -992,6 +1074,268 @@ void ngx_reload_var_conf(ngx_str_t *f , ngx_str_t *var_name /*ngx_int_t flag*/)
 
 }
 
+void ngx_set_region(ngx_uint_t up_name_hash , ngx_str_t *server, ngx_uint_t region)
+{
+	size_t    i;
+	ngx_str_t *s;
+	ngx_http_upstream_check_peers_shm_t *p_shm = check_peers_ctx->peers_shm ;
+	ngx_http_upstream_check_peer_t *peer = check_peers_ctx->peers.elts;
+
+	 for (i = 0; i < check_peers_ctx->peers.nelts; i++) {
+		 if( p_shm->peers[i].upstream_name == up_name_hash ){
+			 s= &peer[i].peer_mem_addr->server;
+			 if ( s->len == server->len && ngx_strncmp(s->data, server->data, server->len) == 0 ){
+			     p_shm->peers[i].region = region;
+			 }
+		 }
+	 }
+}
+
+void ngx_reload_region_conf(ngx_str_t *f , ngx_uint_t up_name_hash)
+{
+	ngx_fd_t          fd;
+	size_t            size;
+	u_char              *buf ,*hdbuf ;
+	ssize_t           n;
+	ngx_file_info_t   fi;
+	//
+	ngx_uint_t sz = 0, region_num = 0;
+	ngx_str_t s ;
+
+	fd = ngx_open_file(f->data, NGX_FILE_RDONLY, NGX_FILE_OPEN, 0);
+
+    if (fd != NGX_INVALID_FILE) {
+    	ngx_fd_info(fd, &fi);
+    	if ( ngx_fd_info(fd, &fi) != NGX_FILE_ERROR) {
+    		size = fi.st_size;
+            if (size > 0){
+            	hdbuf = buf = malloc(size+1);
+                if (buf != NULL){
+                	n = ngx_read_fd(fd, buf, size);
+                    if (n > 0){
+                        buf[size]='\0';
+                    	while ( *buf != '\0' ){
+                    	    sz = read_line(buf);
+                    	    if(sz > 0){
+                                if ( *buf == '[' && *(buf+sz-1) ==']' ){ //region number
+                                	region_num = ngx_atoi(buf+1, sz-2);
+                                } else {
+                                	if (*buf != '#'){
+                                		s.data = buf;
+                                		s.len = sz;
+                                		ngx_set_region(up_name_hash,&s,region_num);
+                                	}
+                                }
+                    	    	buf += sz;
+                    	    	if(*buf == '\0'){
+                    	    		break;
+                    	    	}
+                    	    }
+                    	    buf++;
+                    	}
+
+                    }
+                    free(hdbuf);
+                }
+
+            }
+    	}
+
+    	if (ngx_close_file(fd) == NGX_FILE_ERROR) {
+//            ngx_log_error(NGX_LOG_ALERT, cf->log, ngx_errno,ngx_close_file_n " %s failed",f->data);
+        }
+
+    }
+
+}
+/*
+ngx_int_t link_callback(ngx_link_item_t *newitem , ngx_link_item_t *olditem)
+{
+	ngx_uint_t   n = (ngx_uint_t)newitem->data;
+	ngx_uint_t   o = (ngx_uint_t)olditem->data;
+	return n - o;
+}*/
+
+ngx_int_t node_compare(ngx_binary_tree_node_t *node1 , ngx_binary_tree_node_t *node2)
+{
+//	key_region_conf_t *k1 ,*k2;
+	ngx_uint_t k1,k2;
+	k1= (ngx_uint_t)node1->data/key_region_key ; //key_hash
+	k2= (ngx_uint_t)node2->data/key_region_key ; //key_hash
+	return k1-k2;
+//	k1 = node1->data;
+//	k2 = node2->data;
+//	return k1->key_hash - k2->key_hash;
+}
+
+void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t *loc_conf )
+{
+	ngx_fd_t          fd;
+	size_t            size;
+	u_char            *s_t, *buf ,*hdbuf ;
+	ssize_t           n;
+	ngx_file_info_t   fi;
+	//
+	ngx_uint_t sz = 0, keyregion;
+	ngx_str_t s_token ;
+	key_region_confs_t  *krcf = NULL;
+	ngx_binary_tree_node_t   *krg, *root;
+
+	fd = ngx_open_file(f->data, NGX_FILE_RDONLY, NGX_FILE_OPEN, 0);
+
+    if (fd != NGX_INVALID_FILE) {
+    	ngx_fd_info(fd, &fi);
+    	if ( ngx_fd_info(fd, &fi) != NGX_FILE_ERROR) {
+    		size = fi.st_size;
+            if (size > 0){
+            	hdbuf = buf = malloc(size+1);
+                if (buf != NULL){
+                	n = ngx_read_fd(fd, buf, size);
+                    if (n > 0){
+                    	krcf = get_key_region_confs(loc_conf);
+                    	root = krg = krcf->key_regions;
+                        buf[size]='\0';
+                    	while ( *buf != '\0' ){
+                    	    sz = read_line(buf);
+                    	    if(sz > 0){
+                                if ( *buf == '[' && *(buf+sz-1) ==']' ){ //variable
+                                	cpy_chars(krcf->variable ,buf+1,sz-2);
+                                } else {
+                                	if (*buf != '#'){
+                                		s_t = ngx_str_sch_next_trimtoken(buf ,sz ,' ',&s_token);
+										if(s_token.len > 0 && s_token.len < sz) {
+//											krg->key_hash = ngx_str_2_hash(&s_token);
+											keyregion = ngx_str_2_hash(&s_token);
+	                                		s_token.len = sz - (s_t - buf) ;
+	                                		s_token.data = s_t;
+	                                		keyregion = keyregion * key_region_key +ngx_atoi(s_token.data, s_token.len);
+//											krg->region = ngx_atoi(s_token.data, s_token.len);
+											if(root == krg) {
+//												ngx_init_binary_tree(&krg->node);
+												ngx_init_binary_tree(krg);
+											}
+//											krg->node.data = krg;
+//											ngx_binary_tree_add_node(&root->node,&krg->node,node_compare);
+											krg->data = (void*)keyregion;
+											ngx_binary_tree_add_node(root, krg,node_compare);
+											krg++;
+											krcf->count++;
+										} else {
+											goto tail;
+										}
+                                	}
+                                }
+                                tail:
+									buf += sz;
+									if(*buf == '\0'){
+										break;
+									}
+                    	    }
+                    	    buf++;
+                    	}
+
+                    }
+                    free(hdbuf);
+                }
+
+            }
+    	}
+
+    	if (ngx_close_file(fd) == NGX_FILE_ERROR) {
+//            ngx_log_error(NGX_LOG_ALERT, cf->log, ngx_errno,ngx_close_file_n " %s failed",f->data);
+        }
+
+    }
+
+}
+
+void ngx_reload_router(ngx_str_t *name , ngx_str_t *cnf)
+{
+	if(loc_cnfs.count >0) {
+		ngx_uint_t i;
+		for(i=0;i<loc_cnfs.count;i++){
+			if ( name->len >0 && loc_cnfs.loc_confs[i]->rounter_name.len == name->len &&
+					!ngx_strncmp(&loc_cnfs.loc_confs[i]->rounter_name, name, name->len) ){
+				loc_cnfs.loc_confs[i]->conf.data = cnf->data;
+				loc_cnfs.loc_confs[i]->conf.len = cnf->len;
+				ngx_reload_loc_router_conf(cnf , loc_cnfs.loc_confs[i]);
+				break;
+			}
+		}
+	}
+}
+
+void ngx_append_router_conf_file(ngx_pool_t *pool ,ngx_str_t *cnf_file , ngx_str_t *key , ngx_uint_t region)
+{
+	ngx_fd_t          fd;
+	size_t            size;
+	u_char           *buf = NULL ,*buf_fst ;
+
+	fd = ngx_open_file(cnf_file->data, NGX_FILE_APPEND,NGX_FILE_OPEN, NGX_FILE_DEFAULT_ACCESS);
+	if (fd != NGX_INVALID_FILE) {
+		char s_reg[4];
+		sprintf(s_reg,"%lu",region);
+		size = key->len + strlen(s_reg) + 2 ;//\nkey\tregion
+		buf_fst = buf = ngx_palloc(pool, size);
+		buf = ngx_strcat(buf , (u_char*)"\n" ,1 );
+		buf = ngx_strcat(buf , key->data ,key->len );
+		buf = ngx_strcat(buf , (u_char*)"\t" ,1 );
+		buf = ngx_strcat(buf , (u_char*)s_reg , strlen(s_reg) );
+		ngx_write_fd(fd, buf_fst ,size);
+		if (ngx_close_file(fd) == NGX_FILE_ERROR) {
+//            ngx_log_error(NGX_LOG_ALERT, cf->log, ngx_errno,ngx_close_file_n " %s failed",f->data);
+		}
+	}
+}
+
+void ngx_add_router_item(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_str_t *key ,ngx_uint_t region)
+{
+	if(loc_cnfs.count >0) {
+		ngx_uint_t i;
+		key_region_confs_t *krc;
+		ngx_binary_tree_node_t  *node,*root;
+		ngx_str_t *cnf_file;
+		for(i=0;i<loc_cnfs.count;i++){
+			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->rounter_name.len == router_name->len &&
+					!ngx_strncmp(&loc_cnfs.loc_confs[i]->rounter_name, router_name, router_name->len) ){
+				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
+				root = krc->key_regions ;
+				node = &krc->key_regions[krc->count];
+				if(krc->count == 0) {
+					ngx_init_binary_tree(root);
+				}
+				node->data = (void*)( ngx_str_2_hash(key)*key_region_key + region);
+				root = ngx_binary_tree_add_node(root, node, node_compare);
+				if(root == node || krc->count == 0){// root==node 意味着节点原来不存在是新增加，否则node新占位无效(替换了原节点中的值)
+					krc->count++;
+				}
+				//
+				cnf_file = &loc_cnfs.loc_confs[i]->conf;
+				if(cnf_file && cnf_file->len>0){
+					ngx_append_router_conf_file(pool ,cnf_file,key,region);
+				}
+				//
+				break;
+			}
+		}
+	}
+}
+
+void ngx_set_router_variable(ngx_str_t *router_name , ngx_str_t *var)
+{
+	if(loc_cnfs.count >0) {
+		ngx_uint_t i;
+		key_region_confs_t *krc;
+		for(i=0;i<loc_cnfs.count;i++){
+			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->rounter_name.len == router_name->len &&
+					!ngx_strncmp(&loc_cnfs.loc_confs[i]->rounter_name, router_name, router_name->len) ){
+				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
+				cpy_chars(krc->variable ,var->data,var->len);
+				break;
+			}
+		}
+	}
+}
 
 ngx_buf_t *ngx_list_var(ngx_pool_t *pool, ngx_str_t *var_name /*ngx_int_t flag*/)
 {
@@ -1055,12 +1399,45 @@ int_in_ints(ngx_uint_t *array , ngx_uint_t value ,size_t len)
 	return NGX_FALSE;
 }
 
+ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t *desc)
+{
+	ngx_str_t *sh;
+	ngx_http_variable_value_t *vl;
+	desc->len=0;
+	if (var->len >= http_head.len && ngx_str_startwith( var->data, http_head.data, http_head.len) ) {//$http_
+		sh = ngx_http_get_variable_head(r,var->data+http_head.len , var->len - http_head.len);
+		if(sh){
+			desc->data = sh->data;
+			desc->len = sh->len;
+		}
+	} else if (var->len >= http_arg.len && ngx_str_startwith( var->data, http_arg.data, http_arg.len) ) {//$arg_
+		var->data = var->data+http_arg.len;
+		var->len = var->len - http_arg.len;
+		ngx_http_get_param_value(r,var->data,var->len, desc);
+	} else if ( !ngx_strncmp(var->data, http_uri.data, http_uri.len) ){//uri
+		desc->data = r->uri.data;
+		desc->len = r->uri.len;
+	} else if (var->len >= http_body.len && ngx_str_startwith( var->data, http_body.data, http_body.len) ) {//post body
+		var->data = var->data + http_body.len;
+		var->len = var->len - http_body.len;
+		desc->len=0;
+		ngx_http_get_post_param(r,var->data,var->len, desc);
+	} else {
+		vl = ngx_http_get_variable_req(r , var);
+		if(vl){
+			desc->data = vl->data;
+			desc->len = vl->len;
+		}
+	}
+	return desc;
+}
+
 static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_item_list *items , ngx_int_t all)
 {
 	ngx_str_t s,s_tmp ,s_token;
 	ngx_str_t *sh;
 	ngx_uint_t *idx = NULL ;
-	ngx_http_variable_value_t *vl;
+//	ngx_http_variable_value_t *vl;
 	ngx_int_t i=0,j=0, fg,ret,sz=0;
 	u_char split_c ,*s_t;
 
@@ -1079,8 +1456,8 @@ static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_
 		} else {
 			split_c = 0;
 		}
-
-		s_tmp.len=0;
+		get_request_value(r,&s,&s_tmp);
+		/*s_tmp.len=0;
 		if (s.len >= http_head.len && ngx_str_startwith( s.data, http_head.data, http_head.len) ) {//$http_
 			sh = ngx_http_get_variable_head(r,s.data+http_head.len , s.len - http_head.len);
 			if(sh){
@@ -1105,7 +1482,7 @@ static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_
 				s_tmp.data = vl->data;
 				s_tmp.len = vl->len;
 			}
-		}
+		}*/
 		if(s_tmp.len > 0){
 			if (split_c){
 				sz = ngx_str_find_chr_count(s_tmp.data , s_tmp.len ,split_c);
@@ -1168,6 +1545,7 @@ static ngx_int_t custom_variable_get_value(ngx_http_request_t *r, ngx_http_varia
 	if(data <= 0 ){
 		return NGX_ERROR;
 	}
+
 
 /*  ngx_str_t s;
 	ngx_str_t *sh;
@@ -1418,6 +1796,32 @@ ngx_http_upstream_get_peer_weight(void *p)
 }
 
 ngx_int_t
+ngx_http_upstream_get_region_total_weight(void *fstp , ngx_uint_t region)
+{
+	ngx_http_upstream_check_peer_t *p;
+	ngx_http_upstream_rr_peer_t *peer;
+	ngx_uint_t total =0;
+	//
+	if (check_peers_ctx == NULL) {
+		return 0;
+	}
+
+	peer=(ngx_http_upstream_rr_peer_t*)fstp;
+
+	for( ; peer; peer=peer->next ) {
+		p = ngx_http_upstream_check_get_peer_by_peer(peer);
+		if(p->shm->region == region){
+			if(!p->shm->weight) {
+				p->shm->weight = p->weight;
+			}
+			total += p->shm->weight;
+		}
+	}
+	//
+	return total;
+}
+
+ngx_int_t
 ngx_http_upstream_get_v_total_weight(void *fstp)
 {
     ngx_http_upstream_check_peer_t  *peer;
@@ -1474,6 +1878,19 @@ ngx_http_upstream_check_peer_down(void *p)
     return (peer->shm->down);
 }
 
+ngx_uint_t
+ngx_http_upstream_get_peer_region(void *p)
+{
+    ngx_http_upstream_check_peer_t  *peer;
+
+    peer = ngx_http_upstream_check_get_peer_by_peer(p);
+
+    if ( peer == NULL ) {
+        return 0 ;
+    }
+
+    return peer->shm->region;
+}
 
 /* TODO: this interface can count each peer's busyness */
 void
@@ -3254,6 +3671,64 @@ ngx_http_upstream_check_clear_all_events()
     }
 }
 
+key_region_confs_t *ngx_http_upstream_get_shm_key_region(ngx_http_upstream_check_loc_conf_t *uclcf)
+{
+	ngx_uint_t      rn_hash,i=0;
+	if(uclcf->shm_key_region_confs == NULL) {
+		//当子进程重启需要从共享内存读回数据
+		rn_hash = ngx_str_2_hash(&uclcf->rounter_name);
+		if(check_peers_ctx != NULL && check_peers_ctx->peers_shm != NULL){
+			key_region_confs_t *cfs = check_peers_ctx->peers_shm->key_region;
+			while( i<var_key_region_max_count ){
+				if (cfs[i].count >0 && cfs[i].rounter_name_hash == rn_hash){
+					uclcf->shm_key_region_confs = &cfs[i];
+					break;
+				}
+				i++;
+			}
+		}
+	}
+	return uclcf->shm_key_region_confs;
+}
+
+ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
+{
+    ngx_http_upstream_check_loc_conf_t    *uclcf;
+    key_region_confs_t     *krc;
+    ngx_str_t val,desc;
+    ngx_uint_t  hash;
+//    key_region_conf_t  data;
+//    ngx_binary_tree_node_t data;
+    ngx_binary_tree_node_t *node ,node_data;
+    uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
+    if (uclcf == NULL){
+    	return 0;
+    }
+    //
+    krc = ngx_http_upstream_get_shm_key_region(uclcf);
+    if(krc == NULL){
+    	return 0;
+    }
+    //
+    val.data=krc->variable;
+    val.len=strlen((char*)val.data);
+    get_request_value(r,&val,&desc);
+    if(desc.len == 0){
+    	return 0;
+    }
+    hash = ngx_str_2_hash(&desc);
+    //
+//    data.key_hash=hash;
+//    node_data.data = &data;
+    node_data.data = (void*)(hash * key_region_key) ;
+//    node = ngx_binary_tree_find(&krc->key_regions->node, &node_data,node_compare);
+    node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
+    if(node == NULL){
+    	return 0;
+    }
+//    return  ((key_region_conf_t*)node->data)->region;
+    return  ((ngx_uint_t)node->data) % key_region_key; //region
+}
 
 static ngx_int_t
 ngx_http_upstream_check_status_handler(ngx_http_request_t *r)
@@ -3836,11 +4311,66 @@ ngx_http_upstream_check_http_send(ngx_conf_t *cf, ngx_command_t *cmd,
 
     value = cf->args->elts;
 
-    ucscf = ngx_http_conf_get_module_srv_conf(cf,
-                                              ngx_http_upstream_check_module);
+    ucscf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_upstream_check_module);
 
     ucscf->send = value[1];
 
+    return NGX_CONF_OK;
+}
+
+
+static char *
+ngx_http_upstream_region(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_str_t                           *value;
+    ngx_http_upstream_check_srv_conf_t  *ucscf;
+    upstream_region_conf_t   *urcf;
+
+    value = cf->args->elts;
+
+    ucscf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_upstream_check_module);
+
+    urcf = &up_region_cnfs.up_region_cnf[up_region_cnfs.count++];
+    urcf->conf.data = (u_char*)ngx_strcpy(cf->pool,&value[1]);
+    urcf->conf.len = strlen((char*)urcf->conf.data);
+    urcf->upstream_hash = ngx_str_2_hash(&ucscf->type_name) ;
+    return NGX_CONF_OK;
+}
+
+static char *
+ngx_http_location_router(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_str_t                           *value , *rn;
+    ngx_http_upstream_check_loc_conf_t  *uclcf;
+    ngx_uint_t                      i=0;
+
+    if (cf->args->nelts !=2 && cf->args->nelts !=3){
+    	return NGX_CONF_ERROR;
+    }
+
+    value = cf->args->elts;
+
+    uclcf = ngx_http_conf_get_module_loc_conf(cf,ngx_http_upstream_check_module);
+
+    uclcf->rounter_name.data = value[1].data;
+    uclcf->rounter_name.len = value[1].len;
+
+    for( ; i<loc_cnfs.count ;i++ ){
+    	rn = &loc_cnfs.loc_confs[i]->rounter_name;
+    	if(rn->len == value[1].len && ngx_strcasecmp(rn->data, value[1].data) ==0){
+    		ngx_log_error(NGX_LOG_ERR, cf->log, 0, " the router name is duplicated : %V ",&value[1]);
+    		return NGX_CONF_OK;
+    	}
+    }
+
+    uclcf->conf.data = NULL;
+    uclcf->conf.len = 0;
+    if(cf->args->nelts ==3){
+    	uclcf->conf.data = (u_char*)ngx_strcpy(cf->pool,&value[2]);
+    	uclcf->conf.len = strlen((char*)uclcf->conf.data);
+    }
+
+    loc_cnfs.loc_confs[loc_cnfs.count++] = uclcf;
     return NGX_CONF_OK;
 }
 
@@ -4031,6 +4561,8 @@ ngx_http_upstream_check_create_main_conf(ngx_conf_t *cf)
 
     vars_hash.count=0;
     vars_hash_conf.count = 0;
+    up_region_cnfs.count = 0;
+    loc_cnfs.count = 0;
 
     return ucmcf;
 }
@@ -4181,6 +4713,7 @@ static void *
 ngx_http_upstream_check_create_srv_conf(ngx_conf_t *cf)
 {
     ngx_http_upstream_check_srv_conf_t  *ucscf;
+    ngx_str_t *loc;
 
     ucscf = ngx_pcalloc(cf->pool, sizeof(ngx_http_upstream_check_srv_conf_t));
     if (ucscf == NULL) {
@@ -4200,6 +4733,15 @@ ngx_http_upstream_check_create_srv_conf(ngx_conf_t *cf)
     ucscf->check_type_conf = NGX_CONF_UNSET_PTR;
 
     ucscf->check_cmd_on=0;
+
+    loc = &((ngx_str_t*)cf->args->elts)[0];
+    ucscf->type.data = loc->data;
+    ucscf->type.len = loc->len;
+    if(ngx_strncmp(loc->data, "upstream", loc->len) == 0){
+	    loc = &((ngx_str_t*)cf->args->elts)[cf->args->nelts-1];
+	    ucscf->type_name.data = loc->data;
+	    ucscf->type_name.len = loc->len;
+    }
 
     return ucscf;
 }
@@ -4225,6 +4767,7 @@ static void *
 ngx_http_upstream_check_create_loc_conf(ngx_conf_t *cf)
 {
     ngx_http_upstream_check_loc_conf_t  *uclcf;
+    ngx_str_t *loc;
 
     uclcf = ngx_pcalloc(cf->pool, sizeof(ngx_http_upstream_check_loc_conf_t));
     if (uclcf == NULL) {
@@ -4232,6 +4775,15 @@ ngx_http_upstream_check_create_loc_conf(ngx_conf_t *cf)
     }
 
     uclcf->format = NGX_CONF_UNSET_PTR;
+
+	loc = &((ngx_str_t*)cf->args->elts)[0];
+	if(ngx_strncmp(loc->data, "location", loc->len) == 0){
+		loc = &((ngx_str_t*)cf->args->elts)[cf->args->nelts-1];
+		uclcf->type_name.data = loc->data;
+		uclcf->type_name.len = loc->len;
+	}
+
+	uclcf->shm_key_region_confs = NULL;
 
     return uclcf;
 }
@@ -4551,12 +5103,26 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
     peers->peers_shm = peers_shm;
     shm_zone->data = peers_shm;
 
-    if (vars_hash_conf.count > 0){
+    if (!opeers_shm && vars_hash_conf.count > 0){
 		ngx_uint_t i;
 		for(i=0;i<vars_hash_conf.count;i++){
 			ngx_reload_var_conf( &vars_hash_conf.v_fs[i].f_conf, &vars_hash_conf.v_fs[i].var_name);
 		}
 	}
+
+    if (!opeers_shm && up_region_cnfs.count >0 ){
+		ngx_uint_t i;
+		for(i=0;i<up_region_cnfs.count;i++){
+			ngx_reload_region_conf(&up_region_cnfs.up_region_cnf[i].conf , up_region_cnfs.up_region_cnf[i].upstream_hash);
+		}
+    }
+
+    if(!opeers_shm && loc_cnfs.count >0) {
+    	ngx_uint_t i;
+		for(i=0;i<loc_cnfs.count;i++){
+			ngx_reload_loc_router_conf(&loc_cnfs.loc_confs[i]->conf , loc_cnfs.loc_confs[i]);
+		}
+    }
 
 	if (opeers_shm) {
 		if(&opeers_shm->vars[0] && opeers_shm->vars[0].var_name_hash > 0){
@@ -4574,6 +5140,10 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
 		//
 		if ( opeers_shm->ips[0].addr){
 			memcpy( &peers_shm->ips , &opeers_shm->ips, sizeof(opeers_shm->ips));
+		}
+		//
+		if (opeers_shm->key_region[0].count > 0) {
+			memcpy( &peers_shm->key_region , &opeers_shm->key_region , sizeof(opeers_shm->key_region));
 		}
 	}
 
@@ -4669,6 +5239,7 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
         psh->busyness     = opsh->busyness;
 
         psh->down         = opsh->down;
+        psh->region       = opsh->region;
 
         psh->force_down   = opsh->force_down;
         psh->weight   = opsh->weight;
@@ -4690,6 +5261,7 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
         psh->weight   = 0;
         psh->v_weight = 0;
         psh->v_total_weight = 0;
+        psh->region = 0;
     }
 
 #if (NGX_HAVE_ATOMIC_OPS)

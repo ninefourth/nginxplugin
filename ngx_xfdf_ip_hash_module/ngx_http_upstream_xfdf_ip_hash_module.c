@@ -36,10 +36,10 @@ typedef struct {
     /* the round robin data must be first */
     ngx_http_upstream_rr_peer_data_t   rrp; //server数据
 
-    ngx_uint_t                         hash;//根据ip计算的哈希值
+    ngx_uint_t                         hash; //根据ip计算的哈希值
 
-    u_char                             addrlen;//ip地址长度
-    u_char                            *addr;/*ip地址,long型，因为inet4的ip的特征是四个数字组成，
+    u_char                             addrlen; //ip地址长度
+    u_char                            *addr;   /*ip地址,long型，因为inet4的ip的特征是四个数字组成，
                                              *每个数字范围在255之内故使用unsigend char表示一个数字，
                                              *四个数字就是四个unsigned char,所以使用一个long型表示unsigned char*
                                              */
@@ -47,6 +47,8 @@ typedef struct {
     u_char                             tries;//在给peer分配server的时候，记录已分配的server，为了均匀
 
     ngx_event_get_peer_pt              get_rr_peer;
+
+    ngx_uint_t                        region; //客户端请求将会负载到的region
 } ngx_http_upstream_ip_hash_peer_data_t;
 
 //一致性哈希算法虚拟节点
@@ -79,8 +81,13 @@ typedef struct {
     ngx_uint_t                          rehash;
     uint32_t                            hash;
     ngx_event_get_peer_pt               get_rr_peer;
+    ngx_uint_t                        region;
 } ngx_http_upstream_hash_peer_data_t;
 
+typedef struct {
+	ngx_http_upstream_rr_peer_data_t  *rrp;
+	ngx_uint_t                    region;
+} ngx_http_upstream_rr_ex_peer_data_t ;
 
 static ngx_int_t ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
     ngx_http_upstream_srv_conf_t *us);
@@ -163,6 +170,7 @@ static ngx_str_t str_sr=ngx_string(" server ");
 static ngx_str_t str_dn=ngx_string(" down=");
 static ngx_str_t str_nm=ngx_string(" name=");
 static ngx_str_t str_wt=ngx_string(" weight=");
+static ngx_str_t str_rg=ngx_string(" region=");
 static ngx_str_t str_rt=ngx_string("\n");
 static ngx_str_t str_st=ngx_string(" {\n");
 static ngx_str_t str_ed=ngx_string(" }\n");
@@ -284,7 +292,7 @@ ngx_xfdf_init_upstream(ngx_pool_t *pool ,ngx_http_upstream_rr_peers_t* peers)
     for (peer = peers->peer; peer; peer = peer->next) {
         xupstream->peers->peer = peer;
         
-        p = xupstream->num /10 +1 ;
+        p = ngx_num_bit_count(xupstream->num) ;
         xupstream->peers->name.len = p;
         xupstream->peers->name.data = ngx_palloc(pool, sizeof(u_char)*p);
         ngx_sprintf(xupstream->peers->name.data,"%ui",xupstream->num);
@@ -315,15 +323,17 @@ ngx_xfdf_list_upstreams()
     for (i=0; i<xfdf_ups->upstreams->nelts; i++){
         len += str_up.len + ups[i].name->len + str_st.len;
         for (j=0; j < ups[i].num; j++) {
-        	char swt[4];
+        	char swt[4], srg[4]={'0',0};
             #if (NGX_HTTP_UPSTREAM_CHECK)
 			    sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer));
+			    sprintf(srg,"%lu",ngx_http_upstream_get_peer_region(ups[i].peers[j].peer));
 		    #else
 			    sprintf(swt,"%lu",ups[i].peers[j].peer->weight);
 		    #endif
             len += str_sr.len+ ups[i].peers[j].peer->server.len + 
                    str_nm.len+ ups[i].peers[j].name.len +
 				   str_wt.len + strlen(swt) +
+				   str_rg.len + strlen(srg) +
                    str_dn.len+ 1 +
                    str_rt.len;
         }
@@ -340,9 +350,10 @@ ngx_xfdf_list_upstreams()
             
             for (j=0; j < ups[i].num; j++) {
                 ngx_uint_t wtlen;
-                char swt[4];
+                char swt[4] , srg[4]={'0',0} ;
                 #if (NGX_HTTP_UPSTREAM_CHECK)
                     sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer));
+    			    sprintf(srg,"%lu",ngx_http_upstream_get_peer_region(ups[i].peers[j].peer));
                 #else
                     sprintf(swt,"%lu",ups[i].peers[j].peer->weight);
                 #endif
@@ -352,11 +363,11 @@ ngx_xfdf_list_upstreams()
                 buf = ngx_strcat(buf ,str_nm.data ,str_nm.len );
                 buf = ngx_strcat(buf ,ups[i].peers[j].name.data ,ups[i].peers[j].name.len );
                 buf = ngx_strcat(buf ,str_wt.data ,str_wt.len );
-                #if (NGX_HTTP_UPSTREAM_CHECK)
-                    ngx_sprintf(buf,"%ui", ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer) );
-                #else
-                    ngx_sprintf(buf,"%ui",ups[i].peers[j].peer->weight);
-                #endif
+                ngx_sprintf(buf,"%s", swt );
+                buf += wtlen;
+                wtlen=strlen(srg);
+                buf = ngx_strcat(buf ,str_rg.data ,str_rg.len );
+                ngx_sprintf(buf,"%s", srg );
                 buf += wtlen;
                 buf = ngx_strcat(buf ,str_dn.data ,str_dn.len );
                 #if (NGX_HTTP_UPSTREAM_CHECK)
@@ -438,6 +449,17 @@ ngx_xfdf_deal_peer_weight(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t w)
     #endif
 }
 
+ngx_http_upstream_rr_peer_t*
+ngx_upstream_region_peer(ngx_http_upstream_rr_peer_t *peer ,ngx_uint_t region)
+{
+	while( region!=0 && ngx_http_upstream_get_peer_region(peer)!= region){
+		if(peer->next == NULL) {
+			break;
+		}
+		peer = peer->next;
+	}
+	return peer;
+}
 
 /*  
 	ip hash，x-forwarded-for 1st , and then $remote_addr
@@ -531,6 +553,10 @@ ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
     iphp->hash = 89;
     iphp->tries = 0;
     iphp->get_rr_peer = ngx_http_upstream_get_round_robin_peer;
+    iphp->region =	0;
+	#if (NGX_HTTP_UPSTREAM_CHECK)
+    	iphp->region =	ngx_http_upstream_request_region(r);
+	#endif
 
     return NGX_OK;
 }
@@ -572,13 +598,28 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
         }
 
         peer = iphp->rrp.peers->peer;//server
+
         #if (NGX_HTTP_UPSTREAM_CHECK)
-            w = hash % (iphp->rrp.peers->total_weight + ngx_http_upstream_get_v_total_weight(peer));//得到所有服务的权重合并根据散列值取模
+        	if(iphp->region == 0) {
+        		//no region
+        		w = hash % (iphp->rrp.peers->total_weight + ngx_http_upstream_get_v_total_weight(peer));//得到所有服务的权重合并根据散列值取模
+        	}else {
+        		w = ngx_http_upstream_get_region_total_weight(peer,iphp->region);
+        		if(w == 0) {
+        			iphp->region = 0;
+        			w = (iphp->rrp.peers->total_weight + ngx_http_upstream_get_v_total_weight(peer));
+        		}
+        		w = hash % w;
+        	}
         #else
             w = hash % iphp->rrp.peers->total_weight ;//得到所有服务的权重合并根据散列值取模
         #endif
         p = 0;
 
+		#if (NGX_HTTP_UPSTREAM_CHECK)
+        	//请求和负载的server不属于同一个region
+        	peer = ngx_upstream_region_peer(peer,iphp->region);
+		#endif
         //得到被负载到的server，大权重的机率更高
 //        while (w >= peer->weight) {
         ngx_int_t pw=peer->weight;
@@ -588,7 +629,11 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
         while (w >= pw) {
 //            w -= peer->weight;
             w -= pw;
+			#if (NGX_HTTP_UPSTREAM_CHECK)
+            peer = ngx_upstream_region_peer(peer->next,iphp->region);
+			#else
             peer = peer->next;
+			#endif
             p++;
             pw=peer->weight;
             #if (NGX_HTTP_UPSTREAM_CHECK)
@@ -1090,6 +1135,10 @@ ngx_http_upstream_init_chash_peer(ngx_http_request_t *r,
     hp->hash = ngx_http_upstream_find_chash_point(xfdfcf->points, hash);
 
     ngx_http_upstream_rr_peers_unlock(hp->rrp.peers);
+    hp->region =	0;
+    #if (NGX_HTTP_UPSTREAM_CHECK)
+       	hp->region =	ngx_http_upstream_request_region(r);
+    #endif
 
     return NGX_OK;
 }
@@ -1135,6 +1184,12 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
              peer;
              peer = peer->next, i++)
         {
+			#if (NGX_HTTP_UPSTREAM_CHECK)
+        		if (ngx_http_upstream_get_peer_region(peer)!= hp->region) {
+        			continue;
+        		}
+			#endif
+
             n = i / (8 * sizeof(uintptr_t));
             m = (uintptr_t) 1 << i % (8 * sizeof(uintptr_t));
 
@@ -1269,22 +1324,37 @@ static ngx_int_t
 ngx_http_upstream_init_rr_peer(ngx_http_request_t *r,
     ngx_http_upstream_srv_conf_t *us)
 {
+	ngx_http_upstream_rr_ex_peer_data_t  *exrrp;
+
     if (ngx_http_upstream_init_round_robin_peer(r, us) != NGX_OK) {
         return NGX_ERROR;
     }
 
+    exrrp = ngx_palloc(r->pool, sizeof(ngx_http_upstream_rr_ex_peer_data_t));
+	if (exrrp == NULL) {
+		return NGX_ERROR;
+	}
+
     r->upstream->peer.get = ngx_http_upstream_get_rr_peer;
+    exrrp->rrp = r->upstream->peer.data;
+    exrrp->region = 0;
+    #if (NGX_HTTP_UPSTREAM_CHECK)
+    	exrrp->region = ngx_http_upstream_request_region(r);
+    #endif
+
+    r->upstream->peer.data = exrrp;
 
     return NGX_OK;
 }
 
 
 static ngx_http_upstream_rr_peer_t *
-ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_peer_data_t *rrp)
+ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_ex_peer_data_t *exrrp)
 {
+	ngx_http_upstream_rr_peer_data_t   *rrp = exrrp->rrp;
     time_t                        now;
     uintptr_t                     m;
-    ngx_int_t                     total;
+    ngx_int_t                     total,pw;
     ngx_uint_t                    i, n, p;
     ngx_http_upstream_rr_peer_t  *peer, *best;
 
@@ -1301,6 +1371,11 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_pee
          peer;
          peer = peer->next, i++)
     {
+		#if (NGX_HTTP_UPSTREAM_CHECK)
+    		if( ( exrrp->region!=0 && ngx_http_upstream_get_peer_region(peer)!= exrrp->region) ){
+    			continue;
+    		}
+		#endif
         n = i / (8 * sizeof(uintptr_t));
         m = (uintptr_t) 1 << i % (8 * sizeof(uintptr_t));
 
@@ -1341,8 +1416,15 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_pee
         peer->current_weight += peer->effective_weight;
         total += peer->effective_weight;
 
-        if (peer->effective_weight < peer->weight) {
+        pw=peer->weight;
+        #if (NGX_HTTP_UPSTREAM_CHECK)
+            pw=ngx_http_upstream_get_peer_weight(peer);
+        #endif
+
+        if (peer->effective_weight < pw) {
             peer->effective_weight++;
+        }else {
+        	peer->effective_weight = pw;
         }
 
         if (best == NULL || peer->current_weight > best->current_weight) {
@@ -1376,7 +1458,8 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_pee
 static ngx_int_t
 ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc, void *data)
 {
-	ngx_http_upstream_rr_peer_data_t  *rrp = data;
+	ngx_http_upstream_rr_ex_peer_data_t *exrrp = data;
+	ngx_http_upstream_rr_peer_data_t  *rrp = exrrp->rrp;
 
 	ngx_int_t                      rc;
 	ngx_uint_t                     i, n;
@@ -1385,6 +1468,7 @@ ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc, void *data)
 
 	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf --- get rr peer, try: %ui", pc->tries);
 
+	pc->data = rrp;//置回，用于默认的方法处理
 	pc->cached = 0;
 	pc->connection = NULL;
 
@@ -1405,7 +1489,7 @@ ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc, void *data)
 		rrp->current = peer;
 
 	} else {
-		peer = ngx_http_upstream_get_peer_rr(pc,rrp);
+		peer = ngx_http_upstream_get_peer_rr(pc,exrrp);
 
 		if (peer == NULL) {
 			goto failed;
@@ -1441,7 +1525,7 @@ failed:
 
 		ngx_http_upstream_rr_peers_unlock(peers);
 
-		rc = ngx_http_upstream_get_rr_peer(pc, rrp);
+		rc = ngx_http_upstream_get_rr_peer(pc, exrrp);
 
 		if (rc != NGX_BUSY) {
 			return rc;

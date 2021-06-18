@@ -2,7 +2,7 @@
 
 ngx_addon_name=ngx_xfdf_ip_hash_module
 ngx_feature_path="$ngx_addon_dir"
-#ngx_feature_deps="$ngx_addon_dir/ngx_http_upstream_xfdf_ip_hash_module.h"
+ngx_feature_deps="$ngx_addon_dir/ngx_http_upstream_xfdf_ip_hash_module.h"
 ngx_feature_src="$ngx_addon_dir/ngx_http_upstream_xfdf_ip_hash_module.c"
 
 have=NGX_HTTP_UPSTREAM_XFDF_IP_HASH . auto/have

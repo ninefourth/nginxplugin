@@ -35,6 +35,7 @@ xfdf_ip_hash指令只有一个参数：
 typedef struct {
     /* the round robin data must be first */
     ngx_http_upstream_rr_peer_data_t   rrp; //server数据
+    ngx_uint_t                        region; //客户端请求将会负载到的region
 
     ngx_uint_t                         hash; //根据ip计算的哈希值
 
@@ -48,7 +49,6 @@ typedef struct {
 
     ngx_event_get_peer_pt              get_rr_peer;
 
-    ngx_uint_t                        region; //客户端请求将会负载到的region
 } ngx_http_upstream_ip_hash_peer_data_t;
 
 //一致性哈希算法虚拟节点
@@ -75,17 +75,17 @@ typedef struct {
 typedef struct {
     /* the round robin data must be first */
     ngx_http_upstream_rr_peer_data_t    rrp;
+    ngx_uint_t                        region;
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *conf;
     ngx_str_t                           key;
     ngx_uint_t                          tries;
     ngx_uint_t                          rehash;
     uint32_t                            hash;
     ngx_event_get_peer_pt               get_rr_peer;
-    ngx_uint_t                        region;
 } ngx_http_upstream_hash_peer_data_t;
 
 typedef struct {
-	ngx_http_upstream_rr_peer_data_t  *rrp;
+	ngx_http_upstream_rr_peer_data_t  rrp;
 	ngx_uint_t                    region;
 } ngx_http_upstream_rr_ex_peer_data_t ;
 
@@ -552,7 +552,7 @@ ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
 
     iphp->hash = 89;
     iphp->tries = 0;
-    iphp->get_rr_peer = ngx_http_upstream_get_round_robin_peer;
+    iphp->get_rr_peer = ngx_http_upstream_get_rr_peer;
     iphp->region =	0;
 	#if (NGX_HTTP_UPSTREAM_CHECK)
     	iphp->region =	ngx_http_upstream_request_region(r);
@@ -581,7 +581,7 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
 
     if (iphp->tries > 20 || iphp->rrp.peers->single) {
         ngx_http_upstream_rr_peers_unlock(iphp->rrp.peers);
-        return iphp->get_rr_peer(pc, &iphp->rrp);
+        return iphp->get_rr_peer(pc, iphp);
     }
 
     now = ngx_time();
@@ -696,7 +696,7 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
         //如果尝试选择大于20次就重新做一次轮循选择
         if (++iphp->tries > 20) {
             ngx_http_upstream_rr_peers_unlock(iphp->rrp.peers);
-            return iphp->get_rr_peer(pc, &iphp->rrp);
+            return iphp->get_rr_peer(pc, iphp);
         }
     }
 
@@ -744,11 +744,16 @@ ngx_http_upstream_init_hash_peer(ngx_http_request_t *r,
         return NGX_ERROR;
     }
 
+    hp->region =	0;
+	#if (NGX_HTTP_UPSTREAM_CHECK)
+		hp->region =	ngx_http_upstream_request_region(r);
+	#endif
+
     r->upstream->peer.get = ngx_http_upstream_get_hash_peer;
 
     xfdfcf = ngx_http_conf_upstream_srv_conf(us, ngx_http_upstream_xfdf_ip_hash_module);
 
-		hp->key.data=NULL ;
+	hp->key.data=NULL ;
     hp->key.len = ngx_http_upstream_ip_get_str(r,&hp->key.data);
     //if cannot get x-forwarded-for , then use $remote_addr
     if (hp->key.len == 0){
@@ -768,7 +773,7 @@ ngx_http_upstream_init_hash_peer(ngx_http_request_t *r,
     hp->tries = 0;
     hp->rehash = 0;
     hp->hash = 0;
-    hp->get_rr_peer = ngx_http_upstream_get_round_robin_peer;
+    hp->get_rr_peer = ngx_http_upstream_get_rr_peer;
 
     return NGX_OK;
 }
@@ -1158,6 +1163,7 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
     ngx_http_upstream_chash_point_t    *point;
     ngx_http_upstream_chash_points_t   *points;
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *xfdfcf;
+    ngx_int_t                      need_region =1;
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get consistent hash peer, try: %ui", pc->tries);
 
@@ -1185,7 +1191,7 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
              peer = peer->next, i++)
         {
 			#if (NGX_HTTP_UPSTREAM_CHECK)
-        		if (ngx_http_upstream_get_peer_region(peer)!= hp->region) {
+        		if (need_region && hp->region!=0 && ngx_http_upstream_get_peer_region(peer)!= hp->region) {
         			continue;
         		}
 			#endif
@@ -1247,6 +1253,9 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
         if (best) {
             best->current_weight -= total;
             goto found;
+        } else if (need_region) {
+        	need_region = 0;
+        	continue;
         }
 
         hp->hash++;
@@ -1326,37 +1335,39 @@ ngx_http_upstream_init_rr_peer(ngx_http_request_t *r,
 {
 	ngx_http_upstream_rr_ex_peer_data_t  *exrrp;
 
-    if (ngx_http_upstream_init_round_robin_peer(r, us) != NGX_OK) {
-        return NGX_ERROR;
-    }
-
     exrrp = ngx_palloc(r->pool, sizeof(ngx_http_upstream_rr_ex_peer_data_t));
 	if (exrrp == NULL) {
 		return NGX_ERROR;
 	}
 
-    r->upstream->peer.get = ngx_http_upstream_get_rr_peer;
-    exrrp->rrp = r->upstream->peer.data;
-    exrrp->region = 0;
-    #if (NGX_HTTP_UPSTREAM_CHECK)
-    	exrrp->region = ngx_http_upstream_request_region(r);
-    #endif
+    r->upstream->peer.data = &exrrp->rrp;
 
-    r->upstream->peer.data = exrrp;
+    if (ngx_http_upstream_init_round_robin_peer(r, us) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    r->upstream->peer.get = ngx_http_upstream_get_rr_peer;
+
+	exrrp->region = 0;
+	#if (NGX_HTTP_UPSTREAM_CHECK)
+		exrrp->region = ngx_http_upstream_request_region(r);
+	#endif
 
     return NGX_OK;
 }
 
 
 static ngx_http_upstream_rr_peer_t *
-ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_ex_peer_data_t *exrrp)
+ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,void *data)
 {
-	ngx_http_upstream_rr_peer_data_t   *rrp = exrrp->rrp;
+	ngx_http_upstream_rr_ex_peer_data_t    *exrrp = data;
+	ngx_http_upstream_rr_peer_data_t   *rrp = &exrrp->rrp;
     time_t                        now;
     uintptr_t                     m;
     ngx_int_t                     total,pw;
     ngx_uint_t                    i, n, p;
     ngx_http_upstream_rr_peer_t  *peer, *best;
+    ngx_int_t                    need_region = 1;
 
     now = ngx_time();
 
@@ -1367,12 +1378,13 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_ex_
     p = 0;
 #endif
 
+    get_peer:
     for (peer = rrp->peers->peer, i = 0;
          peer;
          peer = peer->next, i++)
     {
 		#if (NGX_HTTP_UPSTREAM_CHECK)
-    		if( ( exrrp->region!=0 && ngx_http_upstream_get_peer_region(peer)!= exrrp->region) ){
+    		if(need_region && exrrp->region!=0 && ngx_http_upstream_get_peer_region(peer)!= exrrp->region ){
     			continue;
     		}
 		#endif
@@ -1434,6 +1446,10 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_ex_
     }
 
     if (best == NULL) {
+    	if (need_region){
+    		need_region = 0;
+    		goto get_peer;
+    	}
         return NULL;
     }
 
@@ -1458,8 +1474,8 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,ngx_http_upstream_rr_ex_
 static ngx_int_t
 ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc, void *data)
 {
-	ngx_http_upstream_rr_ex_peer_data_t *exrrp = data;
-	ngx_http_upstream_rr_peer_data_t  *rrp = exrrp->rrp;
+	ngx_http_upstream_rr_ex_peer_data_t    *exrrp = data;
+	ngx_http_upstream_rr_peer_data_t  *rrp = &exrrp->rrp;
 
 	ngx_int_t                      rc;
 	ngx_uint_t                     i, n;
@@ -1468,7 +1484,6 @@ ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc, void *data)
 
 	ngx_log_debug1(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf --- get rr peer, try: %ui", pc->tries);
 
-	pc->data = rrp;//置回，用于默认的方法处理
 	pc->cached = 0;
 	pc->connection = NULL;
 

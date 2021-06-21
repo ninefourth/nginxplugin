@@ -344,7 +344,7 @@ ngx_http_var_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     				v_cf.data = (u_char*)ngx_strcpy(cf->pool,&v_cf);
     				ngx_http_upstream_check_add_variable(cf,&v_n);
     				ngx_preload_var_conf(&v_n,&v_cf);
-    				break;
+    				return NGX_CONF_OK;
     			}
     		}
     		//if has no configure file

@@ -1016,9 +1016,10 @@ ngx_http_upstream_init_chash(ngx_conf_t *cf, ngx_http_upstream_srv_conf_t *us)
 
         prev_hash.value = 0;
         npoints = peer->weight * 160;
-        #if (NGX_HTTP_UPSTREAM_CHECK)
-            npoints=ngx_http_upstream_get_peer_weight(peer) * 160;
-        #endif
+//        #if (NGX_HTTP_UPSTREAM_CHECK)
+//        	j = ngx_http_upstream_get_peer_weight(peer) * 160;
+//            npoints = (j == 0)? npoints : j ;
+//        #endif
 
         for (j = 0; j < npoints; j++) {
             hash = base_hash;
@@ -1140,10 +1141,10 @@ ngx_http_upstream_init_chash_peer(ngx_http_request_t *r,
     hp->hash = ngx_http_upstream_find_chash_point(xfdfcf->points, hash);
 
     ngx_http_upstream_rr_peers_unlock(hp->rrp.peers);
-    hp->region =	0;
-    #if (NGX_HTTP_UPSTREAM_CHECK)
-       	hp->region =	ngx_http_upstream_request_region(r);
-    #endif
+//    hp->region =	0;
+//    #if (NGX_HTTP_UPSTREAM_CHECK)
+//       	hp->region =	ngx_http_upstream_request_region(r);
+//    #endif
 
     return NGX_OK;
 }
@@ -1163,7 +1164,7 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
     ngx_http_upstream_chash_point_t    *point;
     ngx_http_upstream_chash_points_t   *points;
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *xfdfcf;
-    ngx_int_t                      need_region =1;
+//    ngx_int_t                      need_region =1;
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get consistent hash peer, try: %ui", pc->tries);
 
@@ -1190,11 +1191,6 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
              peer;
              peer = peer->next, i++)
         {
-			#if (NGX_HTTP_UPSTREAM_CHECK)
-        		if (need_region && hp->region!=0 && ngx_http_upstream_get_peer_region(peer)!= hp->region) {
-        			continue;
-        		}
-			#endif
 
             n = i / (8 * sizeof(uintptr_t));
             m = (uintptr_t) 1 << i % (8 * sizeof(uintptr_t));
@@ -1213,7 +1209,13 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
             {
                 continue;
             }
-            
+
+//			#if (NGX_HTTP_UPSTREAM_CHECK)
+//        		if (need_region && hp->region!=0 && ngx_http_upstream_get_peer_region(peer)!= hp->region) {
+//        			continue;
+//        		}
+//			#endif
+
             #if (NGX_HTTP_UPSTREAM_CHECK)
             ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - consistent hash peer, check peer down ");
             if (ngx_http_upstream_check_peer_force_down(peer)) {
@@ -1253,9 +1255,9 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
         if (best) {
             best->current_weight -= total;
             goto found;
-        } else if (need_region) {
-        	need_region = 0;
-        	continue;
+//        } else if (need_region) {
+//        	need_region = 0;
+//        	continue;
         }
 
         hp->hash++;

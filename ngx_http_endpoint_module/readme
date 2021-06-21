@@ -116,7 +116,7 @@ http://localhost:8100/address/allow?ip=192.168.0.0/16
 #查看被禁掉的ip
 http://localhost:8100/address/deny/list
 
-六.upstream中server分区(region)，访问路由到对应region
+六.upstream中server分区(region)，访问路由到对应region (xfdf_ip_hash consistent模式不支持分区)
 #定义分区
 upstream {
 ...
@@ -148,7 +148,7 @@ fzy.sm7.fxscm.net   1
 http://localhost:8100/region/[upstream]?conf=conf/include/region.cnf
 #重置访问路由规则
 http://localhost:8100/rounter/[name]?conf=conf/include/router.cnf
-#给指定路由规则添加项目
+#给指定路由规则添加项目,并会同步到相应的配置文件中
 http://localhost:8100/rounter/[name]/add/[key]/[value]
 #给指定路由规则更换路由规则变量
 http://localhost:8100/rounter/[name]/add/[variable]

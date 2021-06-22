@@ -134,7 +134,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     ngx_buf_t                  *buf;
     ngx_chain_t                out;
     ngx_str_t                  *con;
-    ngx_str_t                  *value;
+    ngx_str_t                  *value,val_tmp;
     ngx_str_t                  arg_cf=ngx_string("conf") , ip = ngx_string("ip");
 
     rc = ngx_http_discard_request_body(r);
@@ -223,14 +223,22 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     			ngx_reload_router(router_name ,&f);
     			buf = append_printf(r->pool, &sucs);
         	}
-    	} else if( resource->nelts == 4 ){// /rounter/[name]/add/[variable]
+    	} else if( resource->nelts == 4 ){// /router/[name]/add/[variable]
     		ngx_str_t *router_name = &value[1]; //router name
     		if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"add", 3) == 0){
     			ngx_str_t *v = &value[3];
     			ngx_set_router_variable(router_name,v);
     			buf = append_printf(r->pool, &sucs);
+    		} else if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"get", 3) == 0){
+    			ngx_str_t *v = &value[3];
+    			char rn[4];
+    			rc = ngx_get_router_variable_region(router_name,v);
+    			sprintf(rn,"%ld",rc);
+    			val_tmp.data = (u_char*)rn;
+    			val_tmp.len = strlen(rn);
+    			buf = append_printf(r->pool, &val_tmp);
     		}
-    	}else if( resource->nelts == 5 ){// /rounter/[name]/add/[key]/[value]
+    	}else if( resource->nelts == 5 ){// /router/[name]/add/[key]/[value]
     		ngx_str_t *router_name = &value[1]; //router name
     		if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"add", 3) == 0){
     			ngx_str_t *k = &value[3];
@@ -332,7 +340,7 @@ ngx_http_var_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     if(cf->args->nelts > 1){
     	ngx_uint_t i ,j;
         ngx_str_t *value = cf->args->elts ,*val ,v_n,v_cf;
-    	for(i=1; i<cf->args->nelts; i++){
+    	for(i=1; i<cf->args->nelts; ){
     		val = &value[i];
     		for(j=1;j < val->len-1 ;j++){
     			//has a configure file
@@ -344,11 +352,13 @@ ngx_http_var_conf(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     				v_cf.data = (u_char*)ngx_strcpy(cf->pool,&v_cf);
     				ngx_http_upstream_check_add_variable(cf,&v_n);
     				ngx_preload_var_conf(&v_n,&v_cf);
-    				return NGX_CONF_OK;
+    				goto next;
     			}
     		}
     		//if has no configure file
     		ngx_http_upstream_check_add_variable(cf,val);
+    		next:
+				++i;
     	}
     }
     #endif

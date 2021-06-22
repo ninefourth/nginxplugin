@@ -93,7 +93,7 @@ typedef struct  {
 	ngx_binary_tree_node_t      key_regions[key_region_count]; //1st node is root; data is key_hash*1000+region
 	u_char                   variable[40];
 	ngx_uint_t                    count;
-	ngx_uint_t                rounter_name_hash;
+	ngx_uint_t                router_name_hash;
 } key_region_confs_t ;
 
 #define var_max_count  20
@@ -359,7 +359,7 @@ typedef struct {
 
 	ngx_str_t                             conf;
     key_region_confs_t                     *shm_key_region_confs;
-    ngx_str_t                             rounter_name;
+    ngx_str_t                             router_name;
 } ngx_http_upstream_check_loc_conf_t;
 
 typedef struct {
@@ -932,20 +932,24 @@ ngx_variable *get_variable_by_hash(ngx_uint_t var_name_hash){
 key_region_confs_t *get_key_region_confs(ngx_http_upstream_check_loc_conf_t *cnf)
 {
 	ngx_int_t i =0;
+	ngx_uint_t rt_hs = ngx_str_2_hash(&cnf->router_name);
 	key_region_confs_t *cfs = check_peers_ctx->peers_shm->key_region;
 	while( i<var_key_region_max_count ){
 		if(cnf->shm_key_region_confs == NULL && cfs[i].count == 0) {
 			cnf->shm_key_region_confs = &cfs[i];
 			break;
 		}
-		if( cfs[i].count >0 && &cfs[i] == cnf->shm_key_region_confs){
+		if( cfs[i].count >0 && ( &cfs[i] == cnf->shm_key_region_confs || cfs[i].router_name_hash == rt_hs ) ){
+			cnf->shm_key_region_confs = &cfs[i];
 			break;
 		}
 		i++;
 	}
-	cnf->shm_key_region_confs->rounter_name_hash = ngx_str_2_hash(&cnf->rounter_name);
-	return cnf->shm_key_region_confs;
-
+	if(cnf->shm_key_region_confs){
+		cnf->shm_key_region_confs->router_name_hash = rt_hs;
+	}
+	cfs = cnf->shm_key_region_confs;
+	return cfs;
 }
 
 ngx_variable *get_variable_by_name(ngx_str_t *var_name){
@@ -1193,6 +1197,7 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                 	n = ngx_read_fd(fd, buf, size);
                     if (n > 0){
                     	krcf = get_key_region_confs(loc_conf);
+                    	if(krcf == NULL) return ;
                     	root = krg = krcf->key_regions;
                         buf[size]='\0';
                     	while ( *buf != '\0' ){
@@ -1254,8 +1259,8 @@ void ngx_reload_router(ngx_str_t *name , ngx_str_t *cnf)
 	if(loc_cnfs.count >0) {
 		ngx_uint_t i;
 		for(i=0;i<loc_cnfs.count;i++){
-			if ( name->len >0 && loc_cnfs.loc_confs[i]->rounter_name.len == name->len &&
-					!ngx_strncmp(&loc_cnfs.loc_confs[i]->rounter_name, name, name->len) ){
+			if ( name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == name->len &&
+					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, name, name->len) ){
 				loc_cnfs.loc_confs[i]->conf.data = cnf->data;
 				loc_cnfs.loc_confs[i]->conf.len = cnf->len;
 				ngx_reload_loc_router_conf(cnf , loc_cnfs.loc_confs[i]);
@@ -1296,9 +1301,10 @@ void ngx_add_router_item(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_str_t *k
 		ngx_binary_tree_node_t  *node,*root;
 		ngx_str_t *cnf_file;
 		for(i=0;i<loc_cnfs.count;i++){
-			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->rounter_name.len == router_name->len &&
-					!ngx_strncmp(&loc_cnfs.loc_confs[i]->rounter_name, router_name, router_name->len) ){
+			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
+					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
 				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
+				if(krc == NULL) return ;
 				root = krc->key_regions ;
 				node = &krc->key_regions[krc->count];
 				if(krc->count == 0) {
@@ -1327,14 +1333,38 @@ void ngx_set_router_variable(ngx_str_t *router_name , ngx_str_t *var)
 		ngx_uint_t i;
 		key_region_confs_t *krc;
 		for(i=0;i<loc_cnfs.count;i++){
-			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->rounter_name.len == router_name->len &&
-					!ngx_strncmp(&loc_cnfs.loc_confs[i]->rounter_name, router_name, router_name->len) ){
+			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
+					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
 				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
+				if(krc == NULL) return ;
 				cpy_chars(krc->variable ,var->data,var->len);
 				break;
 			}
 		}
 	}
+}
+
+ngx_int_t ngx_get_router_variable_region(ngx_str_t *router_name , ngx_str_t *var)
+{
+	ngx_int_t   ret = -1;
+	if(loc_cnfs.count >0) {
+		ngx_uint_t i;
+		key_region_confs_t *krc;
+		ngx_binary_tree_node_t  *node,node_data;
+		for(i=0;i<loc_cnfs.count;i++){
+			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
+					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
+				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
+				if(krc == NULL) return -2;
+				node_data.data = (void*)( ngx_str_2_hash(var)*key_region_key);
+				node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
+				if(node){
+					return  ((ngx_uint_t)node->data) % key_region_key; //region
+				}
+			}
+		}
+	}
+	return ret ;
 }
 
 ngx_buf_t *ngx_list_var(ngx_pool_t *pool, ngx_str_t *var_name /*ngx_int_t flag*/)
@@ -3676,11 +3706,11 @@ key_region_confs_t *ngx_http_upstream_get_shm_key_region(ngx_http_upstream_check
 	ngx_uint_t      rn_hash,i=0;
 	if(uclcf->shm_key_region_confs == NULL) {
 		//当子进程重启需要从共享内存读回数据
-		rn_hash = ngx_str_2_hash(&uclcf->rounter_name);
+		rn_hash = ngx_str_2_hash(&uclcf->router_name);
 		if(check_peers_ctx != NULL && check_peers_ctx->peers_shm != NULL){
 			key_region_confs_t *cfs = check_peers_ctx->peers_shm->key_region;
 			while( i<var_key_region_max_count ){
-				if (cfs[i].count >0 && cfs[i].rounter_name_hash == rn_hash){
+				if (cfs[i].count >0 && cfs[i].router_name_hash == rn_hash){
 					uclcf->shm_key_region_confs = &cfs[i];
 					break;
 				}
@@ -4352,11 +4382,11 @@ ngx_http_location_router(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     uclcf = ngx_http_conf_get_module_loc_conf(cf,ngx_http_upstream_check_module);
 
-    uclcf->rounter_name.data = value[1].data;
-    uclcf->rounter_name.len = value[1].len;
+    uclcf->router_name.data = value[1].data;
+    uclcf->router_name.len = value[1].len;
 
     for( ; i<loc_cnfs.count ;i++ ){
-    	rn = &loc_cnfs.loc_confs[i]->rounter_name;
+    	rn = &loc_cnfs.loc_confs[i]->router_name;
     	if(rn->len == value[1].len && ngx_strcasecmp(rn->data, value[1].data) ==0){
     		ngx_log_error(NGX_LOG_ERR, cf->log, 0, " the router name is duplicated : %V ",&value[1]);
     		return NGX_CONF_OK;

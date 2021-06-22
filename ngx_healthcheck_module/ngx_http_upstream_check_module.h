@@ -40,6 +40,7 @@ ngx_int_t ngx_http_upstream_get_region_total_weight(void *fstp , ngx_uint_t regi
 void ngx_reload_router(ngx_str_t *name , ngx_str_t *cnf);
 void ngx_add_router_item(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_str_t *key ,ngx_uint_t region);
 void ngx_set_router_variable(ngx_str_t *router_name , ngx_str_t *var);
+ngx_int_t ngx_get_router_variable_region(ngx_str_t *router_name , ngx_str_t *var);
 
 #endif //_NGX_HTTP_UPSTREAM_CHECK_MODELE_H_INCLUDED_
 

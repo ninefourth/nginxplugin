@@ -1,12 +1,27 @@
 #include "ngx_common_util.h"
 
 
-ngx_uint_t ngx_str_find_chr_count(u_char *s ,size_t len , u_char c)
+ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c)
 {
-	ngx_uint_t sz = 0;
+	ngx_uint_t i = 0 ,p1 = 0, p2 = 0 ,sz = 0 ,sp =1;
+	while( i < len){
+		p2 = i;
+		if( s[i] == c ) {
+			if (p2 > p1+1 && sp == 0) sz++ ;
+			p1=p2;
+			sp=1;
+		}else if (s[i] != ' ' && s[i] != '\t') {
+			sp =0;
+		}
+		i++;
+	}
+	if (p2 > p1 && sp == 0) sz++ ;
+
+	/*ngx_uint_t sz = 0;
 	while( len >0 ){
 		sz = (s[--len] == c) ? sz+1 : sz ;
 	}
+	if(s[len] == c) sz--;*/
 	return sz;
 }
 
@@ -31,7 +46,9 @@ u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t 
         if(tmp_c == c){
         	s++;
         	count++;
-        	sched = 1;
+        	if(token->len > 0){
+        	    sched = 1;
+        	}
         	continue;
         }
         if (sched){

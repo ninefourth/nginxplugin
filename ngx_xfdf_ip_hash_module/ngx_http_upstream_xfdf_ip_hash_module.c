@@ -371,7 +371,8 @@ ngx_xfdf_list_upstreams()
                 buf += wtlen;
                 buf = ngx_strcat(buf ,str_dn.data ,str_dn.len );
                 #if (NGX_HTTP_UPSTREAM_CHECK)
-                    ngx_sprintf(buf,"%ui", ups[i].peers[j].peer->down ? ups[i].peers[j].peer->down : ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer) );
+                	ngx_sprintf(buf,"%ui", ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer));
+//                    ngx_sprintf(buf,"%ui", ups[i].peers[j].peer->down ? ups[i].peers[j].peer->down : ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer) );
                 #else
                     ngx_sprintf(buf,"%ui",ups[i].peers[j].peer->down);
                 #endif
@@ -656,10 +657,6 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
         }
 
         ngx_log_debug2(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get ip hash peer, hash: %ui %04XL", p, (uint64_t) m);
-        //如果宕机重新选择
-        if (peer->down) {
-            goto next;
-        }
 
         #if (NGX_HTTP_UPSTREAM_CHECK)
         ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get hash peer, check peer down ");
@@ -674,6 +671,12 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
             ngx_log_error(NGX_LOG_ERR, pc->log, 0, "xfdf - ip hash peer [%V] is check-down", &peer->server);
             goto next;
         }
+		#else
+        //如果宕机重新选择
+        if (peer->down) {
+            goto next;
+        }
+
         #endif
 
         //如果服务错误重新选择
@@ -863,9 +866,6 @@ ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data)
 
         ngx_log_debug2(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get hash peer, value:%uD, peer:%ui", hp->hash, p);
 
-        if (peer->down) {
-            goto next;
-        }
         
         #if (NGX_HTTP_UPSTREAM_CHECK)
         ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get hash peer, check peer down ");
@@ -881,6 +881,10 @@ ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data)
             ngx_log_error(NGX_LOG_ERR, pc->log, 0,"xfdf - hash peer [%V] is check-down ", &peer->server);
             goto next;
         }
+		#else
+        if (peer->down) {
+		   goto next;
+	    }
         #endif
 
         if (peer->max_fails
@@ -1199,9 +1203,6 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
                 continue;
             }
 
-            if (peer->down) {
-                continue;
-            }
 
             if (peer->server.len != server->len
                 || ngx_strncmp(peer->server.data, server->data, server->len)
@@ -1224,6 +1225,10 @@ ngx_http_upstream_get_chash_peer(ngx_peer_connection_t *pc, void *data)
             }
             if (ngx_http_upstream_check_peer_down(peer)) {
                 ngx_log_error(NGX_LOG_ERR, pc->log, 0,"xfdf - consistent peer [%V] is check-down ", &peer->server);
+                continue;
+            }
+			#else
+            if (peer->down) {
                 continue;
             }
             #endif
@@ -1397,10 +1402,6 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,void *data)
             continue;
         }
 
-        if (peer->down) {
-            continue;
-        }
-
         #if (NGX_HTTP_UPSTREAM_CHECK)
         ngx_log_debug(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf - get rr peer, check peer down ");
         ngx_uint_t nut = ngx_http_upstream_check_peer_force_down(peer);
@@ -1412,6 +1413,10 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,void *data)
         }
         if (ngx_http_upstream_check_peer_down(peer)) {
             ngx_log_error(NGX_LOG_ERR, pc->log, 0, "xfdf - ip rr peer [%V] is check-down", &peer->server);
+            continue;
+        }
+		#else
+        if (peer->down) {
             continue;
         }
         #endif

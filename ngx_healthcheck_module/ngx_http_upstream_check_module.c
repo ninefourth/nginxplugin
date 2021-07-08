@@ -243,6 +243,8 @@ struct ngx_http_upstream_check_peer_s {
     ngx_http_upstream_rr_peer_t             *peer_mem_addr;
     //init weight of peer
     ngx_uint_t                              weight;
+    //
+    ngx_uint_t								default_down;
 
 };
 
@@ -598,7 +600,7 @@ ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *peers
 static ngx_int_t ngx_http_upstream_check_init_shm_peer(
     ngx_http_upstream_check_peer_shm_t *peer_shm,
     ngx_http_upstream_check_peer_shm_t *opeer_shm,
-    ngx_uint_t init_down, ngx_pool_t *pool, ngx_str_t *peer_name);
+    ngx_uint_t init_down, ngx_pool_t *pool, ngx_http_upstream_check_peer_t *pr);
 
 static ngx_int_t ngx_http_upstream_check_init_shm_zone(
     ngx_shm_zone_t *shm_zone, void *data);
@@ -1513,18 +1515,20 @@ static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_
 				s_tmp.len = vl->len;
 			}
 		}*/
+
 		if(s_tmp.len > 0){
 			if (split_c){
-				sz = ngx_str_find_chr_count(s_tmp.data , s_tmp.len ,split_c);
-				sz++;
+				sz = ngx_str_find_element_count(s_tmp.data , s_tmp.len ,split_c);
 				idx = ngx_palloc(r->pool, sz*sizeof(ngx_uint_t));
 				sh=&s_tmp;
 				while( j < sz){
 					s_t = ngx_str_sch_next_trimtoken(sh->data ,sh->len ,split_c,&s_token);
 					if(s_token.len > 0){
 						idx[j]=ngx_str_2_hash(&s_token);
-						sh->len = sh->len - (s_t - sh->data) +1;
-						sh->data = s_t;
+						if(s_t != NULL){
+						    sh->len = sh->len - (s_t - sh->data) ;
+						    sh->data = s_t;
+						}
 						j++;
 					}else {
 						break;
@@ -1672,6 +1676,7 @@ ngx_http_upstream_check_add_peer(ngx_conf_t *cf,
     peer->peer_addr->sockaddr = pr->sockaddr;
     peer->peer_addr->socklen = pr->socklen;
     peer->weight = pr->weight;
+    peer->default_down = pr->down;
 //    ngx_memcpy(&peer->peer_addr->name.data,pr->name.data, pr->name.len);
 //    peer->peer_addr->name.len=pr->name.len;
     peer->peer_addr->name.len=pr->name.len;
@@ -5082,7 +5087,6 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
         if (same) {
             continue;
         }
-
         peer_shm->socklen = peer[i].peer_addr->socklen;
         peer_shm->sockaddr = ngx_slab_alloc(shpool, peer_shm->socklen);
         if (peer_shm->sockaddr == NULL) {
@@ -5111,8 +5115,10 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
                                "http upstream check, inherit opeer: %V ",
                                &peer[i].peer_addr->name);
 
+//                rc = ngx_http_upstream_check_init_shm_peer(peer_shm, opeer_shm,
+//                         0, pool, &peer[i].peer_addr->name);
                 rc = ngx_http_upstream_check_init_shm_peer(peer_shm, opeer_shm,
-                         0, pool, &peer[i].peer_addr->name);
+                                         0, pool, &peer[i]);
                 if (rc != NGX_OK) {
                     return NGX_ERROR;
                 }
@@ -5122,9 +5128,13 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
         }
 
         ucscf = peer[i].conf;
+//        rc = ngx_http_upstream_check_init_shm_peer(peer_shm, NULL,
+//                                                   ucscf->default_down, pool,
+//                                                   &peer[i].peer_addr->name);
         rc = ngx_http_upstream_check_init_shm_peer(peer_shm, NULL,
-                                                   ucscf->default_down, pool,
-                                                   &peer[i].peer_addr->name);
+                                                           ucscf->default_down, pool,
+                                                           &peer[i]);
+
         if (rc != NGX_OK) {
             return NGX_ERROR;
         }
@@ -5256,7 +5266,7 @@ ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *p, ng
 static ngx_int_t
 ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
     ngx_http_upstream_check_peer_shm_t *opsh, ngx_uint_t init_down,
-    ngx_pool_t *pool, ngx_str_t *name)
+    ngx_pool_t *pool, ngx_http_upstream_check_peer_t *pr)
 {
     u_char  *file;
 
@@ -5287,7 +5297,8 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
 
         psh->down         = init_down;
 
-        psh->force_down   = 0;
+        psh->force_down   = pr->default_down;
+
         psh->weight   = 0;
         psh->v_weight = 0;
         psh->v_total_weight = 0;

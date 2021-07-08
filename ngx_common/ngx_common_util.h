@@ -50,7 +50,7 @@ char *ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str);
 u_char *ngx_strcat(u_char* des , u_char* src , size_t len);
 ngx_uint_t read_line(u_char *buf);
 ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len);
-ngx_uint_t ngx_str_find_chr_count(u_char *s ,size_t len , u_char c);
+ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c);
 u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *token);
 size_t ngx_num_bit_count(ngx_int_t num);
 

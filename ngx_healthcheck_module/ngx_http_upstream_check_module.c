@@ -3560,8 +3560,8 @@ ngx_http_upstream_check_status_update(ngx_http_upstream_check_peer_t *peer,
         if (peer->shm->down && peer->shm->rise_count >= ucscf->rise_count) {
             peer->shm->down = 0;
             ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
-                          "enable check peer: %V ",
-                          &peer->check_peer_addr->name);
+                          "enable check peer: %V ; enable peer :%V",
+                          &peer->check_peer_addr->name , &peer->peer_addr->name);
         }
     } else {
         peer->shm->rise_count = 0;
@@ -3569,8 +3569,8 @@ ngx_http_upstream_check_status_update(ngx_http_upstream_check_peer_t *peer,
         if (!peer->shm->down && peer->shm->fall_count >= ucscf->fall_count) {
             peer->shm->down = 1;
             ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
-                          "disable check peer: %V ",
-                          &peer->check_peer_addr->name);
+                          "disable check peer: %V ; disable peer: %V",
+                          &peer->check_peer_addr->name, &peer->peer_addr->name);
         }
     }
 
@@ -3730,11 +3730,12 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 {
     ngx_http_upstream_check_loc_conf_t    *uclcf;
     key_region_confs_t     *krc;
-    ngx_str_t val,desc;
-    ngx_uint_t  hash;
+    ngx_str_t val,desc ,s_token;
+    ngx_uint_t  hash,k=0,sz;
+    u_char *s_t;
 //    key_region_conf_t  data;
 //    ngx_binary_tree_node_t data;
-    ngx_binary_tree_node_t *node ,node_data;
+    ngx_binary_tree_node_t *node=NULL ,node_data;
     uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
     if (uclcf == NULL){
     	return 0;
@@ -3747,6 +3748,32 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
     //
     val.data=krc->variable;
     val.len=strlen((char*)val.data);
+    //
+    sz = ngx_str_find_element_count(val.data , val.len ,'|');
+	while( k++ < sz){
+		s_t = ngx_str_sch_next_trimtoken(val.data ,val.len ,'|',&s_token);
+		if(s_token.len > 0){
+			val.len = val.len - (s_t - val.data) ;
+			val.data = s_t;
+			//
+			get_request_value(r,&s_token,&desc);
+			if(desc.len > 0){
+				hash = ngx_str_2_hash(&desc);
+				node_data.data = (void*)(hash * key_region_key) ;
+				node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
+				if(node != NULL){
+					break;
+				}
+			}
+		}else {
+			break;
+		}
+	}
+	if(node == NULL){
+		return 0;
+	}
+	return  ((ngx_uint_t)node->data) % key_region_key; //region
+    /*
     get_request_value(r,&val,&desc);
     if(desc.len == 0){
     	return 0;
@@ -3762,7 +3789,7 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
     	return 0;
     }
 //    return  ((key_region_conf_t*)node->data)->region;
-    return  ((ngx_uint_t)node->data) % key_region_key; //region
+    return  ((ngx_uint_t)node->data) % key_region_key; //region*/
 }
 
 static ngx_int_t

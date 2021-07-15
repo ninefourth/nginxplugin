@@ -168,6 +168,7 @@ static ngx_http_upstream_xfdf_ups_t *xfdf_ups;
 static ngx_str_t str_up=ngx_string("upstream ");
 static ngx_str_t str_sr=ngx_string(" server ");
 static ngx_str_t str_dn=ngx_string(" down=");
+static ngx_str_t str_cd=ngx_string(" check_down=");
 static ngx_str_t str_nm=ngx_string(" name=");
 static ngx_str_t str_wt=ngx_string(" weight=");
 static ngx_str_t str_rg=ngx_string(" region=");
@@ -335,6 +336,7 @@ ngx_xfdf_list_upstreams()
 				   str_wt.len + strlen(swt) +
 				   str_rg.len + strlen(srg) +
                    str_dn.len+ 1 +
+                   str_cd.len+ 1 +
                    str_rt.len;
         }
         len += str_ed.len;
@@ -375,6 +377,13 @@ ngx_xfdf_list_upstreams()
 //                    ngx_sprintf(buf,"%ui", ups[i].peers[j].peer->down ? ups[i].peers[j].peer->down : ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer) );
                 #else
                     ngx_sprintf(buf,"%ui",ups[i].peers[j].peer->down);
+                #endif
+                buf += 1;
+                buf = ngx_strcat(buf ,str_cd.data ,str_cd.len );
+                #if (NGX_HTTP_UPSTREAM_CHECK)
+                	ngx_sprintf(buf,"%ui", ngx_http_upstream_check_peer_down(ups[i].peers[j].peer));
+                #else
+                    ngx_sprintf(buf,"%ui",0);
                 #endif
                 buf += 1;
               //  buf+=(ups[i].peers[j].peer->down/10+1);

@@ -94,6 +94,8 @@ typedef struct  {
 	u_char                   variable[40];
 	ngx_uint_t                    count;
 	ngx_uint_t                router_name_hash;
+	u_char					key_template[20];//the template of key , such as www.*.fxscm , left is high 4bit ,right is low 4bit
+	size_t					count_key_template;
 } key_region_confs_t ;
 
 #define var_max_count  20
@@ -159,12 +161,15 @@ typedef struct {
 #define    var_group_max_count   20
 #define    var_max_access_ip    50
 #define    var_key_region_max_count 20
+#define    var_str_len			30
 
 typedef struct {
 	//name of nginx variable
 	u_char                                   var_name[var_name_max_len];
 	//the value of nginx variable list
 	ngx_uint_t                               values_hash[var_hash_max_count];//不保存名称而只使用哈希值是因为占用预留空间过大
+	u_char									values[var_hash_max_count][var_str_len] ;//
+	size_t									var_count;
 } ngx_variables_item;
 
 typedef struct {
@@ -1039,19 +1044,29 @@ void ngx_reload_var_conf(ngx_str_t *f , ngx_str_t *var_name /*ngx_int_t flag*/)
                                 	i++;
                                 	j = 0;
                                 	cpy_chars(items->var_items[i].var_name , buf+1 ,sz-2 ); //except '[' and ']'
+                                	items->var_items[i].var_count = 0;
                                 	items->var_items[i+1].var_name[0] = '\0';
                                 } else {
                                 	if (i >= 0 && i<var_list_max_count && *buf != '#'){
                                 		if(j < var_hash_max_count){
-                                	        items->var_items[i].values_hash[j++] = ngx_chars_2_hash(buf,sz);
-                                	        items->var_items[i].values_hash[j] = 0;
+                                	        items->var_items[i].values_hash[j] = ngx_chars_2_hash(buf,sz);
+                                	        cpy_chars(items->var_items[i].values[j] , buf , (sz>var_str_len-1)?var_str_len-1:sz );
+                                	        j++;
+                                	        items->var_items[i].var_count++;
+//                                	        if( ++j < var_hash_max_count){
+//                                	        	items->var_items[i].values_hash[j] = 0;
+//                                	        }
                                 		} else {//if the count of values more than [var_list_max_count] ,then create new variable(same name) for more values
                                 			i++;
                                 			j = 0;
                                 			cpy_chars(items->var_items[i].var_name , items->var_items[i-1].var_name ,var_name_max_len );
                                 			items->var_items[i+1].var_name[0] = '\0';
-                                			items->var_items[i].values_hash[j++] = ngx_chars_2_hash(items->var_items[i].var_name,strlen((char*)items->var_items[i].var_name));
-                                			items->var_items[i].values_hash[j] = 0;
+//                                			items->var_items[i].values_hash[j++] = ngx_chars_2_hash(items->var_items[i].var_name,strlen((char*)items->var_items[i].var_name));
+                                			items->var_items[i].values_hash[j] = ngx_chars_2_hash(buf,sz);
+                                			cpy_chars(items->var_items[i].values[j] , buf , (sz>var_str_len-1)?var_str_len-1:sz );
+                                			j++;
+                                			items->var_items[i].var_count=1;
+//                                			items->var_items[i].values_hash[++j] = 0;
                                 		}
                                 	}
                                 }
@@ -1178,7 +1193,8 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
 {
 	ngx_fd_t          fd;
 	size_t            size;
-	u_char            *s_t, *buf ,*hdbuf ;
+	u_char            *s_t, *buf ,*hdbuf,key_tpl ;
+	ngx_int_t			p1,p2,p;
 	ssize_t           n;
 	ngx_file_info_t   fi;
 	//
@@ -1212,6 +1228,25 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                                 		s_t = ngx_str_sch_next_trimtoken(buf ,sz ,' ',&s_token);
 										if(s_token.len > 0 && s_token.len < sz) {
 //											krg->key_hash = ngx_str_2_hash(&s_token);
+											p1 = ngx_str_index_of(s_token.data,s_token.len,'(',0);
+											//如果key中有"(" ,如：(5)zzjdl.fxscm.net(-3)
+											if( p1 >= 0 ){
+												p2 = ngx_str_index_of(s_token.data,s_token.len ,')',p1+1);
+												p=ngx_str_to_int(s_token.data+p1+1, p2-p1-1);
+												if(p1 == 0) {//在首部
+													key_tpl = (u_char) p << 4 ; //left token
+													p1 = ngx_str_index_of(s_token.data,s_token.len,'(',p2+1);
+													if( p1 > 0 ){//在尾部
+														p2 = ngx_str_index_of(s_token.data,s_token.len ,')',p1+1);
+														p=ngx_str_to_int(s_token.data+p1+1, p2-p1-1);
+														key_tpl += p; //right token
+													}
+												}else {
+													key_tpl = p;
+												}
+												krcf->key_template[krcf->count_key_template++] = key_tpl;
+											}
+											//
 											keyregion = ngx_str_2_hash(&s_token);
 	                                		s_token.len = sz - (s_t - buf) ;
 	                                		s_token.data = s_t;
@@ -1372,7 +1407,7 @@ ngx_int_t ngx_get_router_variable_region(ngx_str_t *router_name , ngx_str_t *var
 ngx_buf_t *ngx_list_var(ngx_pool_t *pool, ngx_str_t *var_name /*ngx_int_t flag*/)
 {
     ngx_buf_t                  *buf;
-    ngx_int_t i,j,k;
+    ngx_uint_t i,j,k;
 
     ngx_variable *var = get_variable_by_name(var_name);
 
@@ -1389,8 +1424,8 @@ ngx_buf_t *ngx_list_var(ngx_pool_t *pool, ngx_str_t *var_name /*ngx_int_t flag*/
 	        n.data = var_item->var_items[i].var_name;
 	        n.len = strlen((char*)var_item->var_items[i].var_name);
 	        buf->last = ngx_sprintf(buf->last, "name is :%V\n", &n );
-	        while (j<var_hash_max_count && var_item->var_items[i].values_hash[j] > 0){
-		        buf->last = ngx_sprintf(buf->last, "%l\n", var_item->var_items[i].values_hash[j] );
+	        while (j<var_hash_max_count && var_item->var_items[i].var_count > j /*var_item->var_items[i].values_hash[j] > 0*/){
+		        buf->last = ngx_sprintf(buf->last, "%s \t %l\n", var_item->var_items[i].values[j],var_item->var_items[i].values_hash[j] );
 	    	    j++;
 	        }
 	        j=0;
@@ -1405,8 +1440,8 @@ ngx_buf_t *ngx_list_var(ngx_pool_t *pool, ngx_str_t *var_name /*ngx_int_t flag*/
 				n.data = var_item_group[k].var_items[i].var_name;
 				n.len = strlen((char*)var_item_group[k].var_items[i].var_name);
 				buf->last = ngx_sprintf(buf->last, "name is :%V\n", &n );
-				while (j<var_hash_max_count && var_item_group[k].var_items[i].values_hash[j] > 0){
-					buf->last = ngx_sprintf(buf->last, "%l\n", var_item_group[k].var_items[i].values_hash[j] );
+				while (j<var_hash_max_count && var_item_group[k].var_items[i].var_count > j /*var_item_group[k].var_items[i].values_hash[j] > 0*/){
+					buf->last = ngx_sprintf(buf->last, "%s \t %l\n", var_item_group[k].var_items[i].values[j] ,var_item_group[k].var_items[i].values_hash[j] );
 					j++;
 				}
 				j=0;

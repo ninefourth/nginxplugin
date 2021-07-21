@@ -112,6 +112,59 @@ ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len)
     return NGX_TRUE;
 }
 
+ngx_int_t
+ngx_str_index_of(u_char *s , size_t len, u_char c,ngx_uint_t begin)
+{
+	size_t i =begin;
+	while( i < len) {
+		if( s[i] == c ) {
+			return i;
+		}
+		i++;
+	}
+	return -1;
+}
+
+ngx_int_t
+ngx_str_to_int(u_char *line, size_t n)
+{
+    ngx_int_t  value, cutoff, cutlim;
+    ngx_uint_t  flag = 0;
+
+    if (n == 0) {
+        return NGX_ERROR;
+    }
+
+    cutoff = NGX_MAX_INT_T_VALUE / 10;
+    cutlim = NGX_MAX_INT_T_VALUE % 10;
+
+    if( *line == '-') {
+    	flag= 1;
+    	line++;
+    	n--;
+    }else if( *line == '+' ){
+    	line++;
+    	n--;
+    }
+
+    for (value = 0; n--; line++) {
+        if (*line < '0' || *line > '9') {
+            return NGX_ERROR;
+        }
+
+        if (value >= cutoff && (value > cutoff || *line - '0' > cutlim)) {
+            return NGX_ERROR;
+        }
+
+        value = value * 10 + (*line - '0');
+    }
+    if(flag == 1){
+    	value = -value;
+    }
+
+    return value;
+}
+
 char*
 ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str){
     char *s;

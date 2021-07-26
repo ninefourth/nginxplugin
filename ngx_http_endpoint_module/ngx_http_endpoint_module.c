@@ -136,6 +136,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     ngx_str_t                  *con;
     ngx_str_t                  *value,val_tmp;
     ngx_str_t                  arg_cf=ngx_string("conf") , ip = ngx_string("ip");
+	u_char 					*s_t;
 
     rc = ngx_http_discard_request_body(r);
     if (rc != NGX_OK) {
@@ -158,25 +159,47 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
         	buf = append_printf(r->pool, con);
         }
     } else if(value[0].len == 4 && ngx_strncasecmp(value[0].data, (u_char *)"down", 4) == 0) {
+    	rc = -1;
+    	ngx_str_t *up,*sr;
         if( resource->nelts == 3  ){
-            ngx_str_t *up = &value[1]; //upstream
-            ngx_str_t *sr = &value[2]; //server
-            ngx_xfdf_deal_server(up,sr,1);
-            buf = append_printf(r->pool, &sucs);
+            up = &value[1]; //upstream
+            sr = &value[2]; //server
+            rc = 1;
         }
         if( resource->nelts == 4  ) {
-            ngx_str_t *up = &value[1]; //upstream
-            ngx_str_t *sr = &value[2]; //server
+            up = &value[1]; //upstream
+            sr = &value[2]; //server
             if(ngx_strncasecmp(value[3].data, (u_char *)"log", 3) == 0) {
-                ngx_xfdf_deal_server(up,sr,2);
-                buf = append_printf(r->pool, &sucs);
+                rc = 2;
             }
+        }
+        if(rc > 0) {
+        	s_t = sr->data;
+            while(s_t){
+            	s_t = ngx_str_sch_next_trimtoken(sr->data ,sr->len ,',',&val_tmp);
+				ngx_xfdf_deal_server(up,&val_tmp,rc);
+				if(s_t != NULL){
+					sr->len = sr->len - (s_t - sr->data);
+					sr->data = s_t;
+				}
+            }
+//            ngx_xfdf_deal_server(up,sr,1);
+            buf = append_printf(r->pool, &sucs);
         }
     } else if(value[0].len == 2 && ngx_strncasecmp(value[0].data, (u_char *)"up", 2) == 0) {
         if( resource->nelts == 3  ){
             ngx_str_t *up = &value[1]; //upstream
             ngx_str_t *sr = &value[2]; //server
-            ngx_xfdf_deal_server(up,sr,0);
+            s_t = sr->data;
+			while(s_t){
+				s_t = ngx_str_sch_next_trimtoken(sr->data ,sr->len ,',',&val_tmp);
+				ngx_xfdf_deal_server(up,&val_tmp,0);
+				if(s_t != NULL){
+					sr->len = sr->len - (s_t - sr->data);
+					sr->data = s_t;
+				}
+			}
+            //
             buf = append_printf(r->pool, &sucs);
         }
     } else if(value[0].len == 6 && ngx_strncasecmp(value[0].data, (u_char *)"weight", 6) == 0) {

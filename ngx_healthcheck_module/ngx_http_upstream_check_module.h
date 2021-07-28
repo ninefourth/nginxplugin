@@ -6,6 +6,7 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+#define default_region 1;
 
 typedef volatile ngx_atomic_int_t  ngx_atomic_i_t;
 

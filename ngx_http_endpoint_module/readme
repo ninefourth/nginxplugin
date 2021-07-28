@@ -18,14 +18,20 @@ var_conf: 如果使用自定义变量(取值为0/1)则在此指令处理注册�
 一.列出所有upstream
 http://192.168.7.233:8100/list
     upstream store {
-     server 192.168.7.105:8082 name=0 weight=2 down=0
-     server 192.168.7.205:8085 name=1 weight=2 down=0
+        server 192.168.128.30:8085 name=0 weight=3 region=2 down=0 check_down=0
+        server 192.168.128.30:8086 name=1 weight=3 region=2 down=0 check_down=0
+        server 192.168.128.30:8087 name=2 weight=3 region=0 down=0 check_down=0
     }
     upstream store1 {
-     server 192.168.7.105:8082 name=0 weight=2 down=0
-     server 192.168.7.205:8085 name=1 weight=2 down=0
+        server 192.168.128.30:8083 name=0 weight=3 region=2 down=0 check_down=0
+        server 192.168.128.30:8084 name=1 weight=3 region=1 down=0 check_down=0
     }
-返回结果里，name是唯一名称，摘挂server使用此值；down表示server的状态;weight表示服务器权重
+返回结果里，
+    name:唯一名称，摘挂server使用此值
+    weight:表示服务器权重
+    region:表示服务器所属分区，配合访问路由可用将指定访问路由到指定分区
+    down:表示server的状态，nginx.conf里的down指令或curl down指令都可以设置此值，如果初始状态是down的情况，使用api up指令可以使服务器处于启动状态
+    check_down:表示监听到后服务器不可用后将服务器自动摘掉,1为摘掉，0为启用
 
 二. 动态摘挂upstream的server，注意必须在配置文件的upstream中使用 xfdf_ip_hash(ngx_xfdf_ip_hash_module)
 #摘掉server /down/{upstream_name}/{server_name}
@@ -36,6 +42,8 @@ http://192.168.7.233:8100/down/store1/0/log
 #挂载server /up/{upstream_name}/{server_name}
 http://192.168.7.233:8100/up/store1/0
 
+如果要摘挂多个服务器可以用","分隔
+
 三.动态设置服务器负载权重
 #设置权重 /weight/{upstream_name}/{server_name}/{权重数值}
 http://192.168.27.74:8100/weight/store1/1/2
@@ -44,6 +52,7 @@ http://192.168.27.74:8100/weight/store1/1/2
 #注意，必须在endpoint指令后添加自定义变量名，方可正常使用：
 如：
     location / {
+        endpoint;
         var_conf fortest forgray;
     }
 #载入变量-用户规则列表，{var_name}自定义变量名，参数conf是指定列表文件位置
@@ -123,7 +132,7 @@ upstream {
 region conf/include/region.conf;
 ...
 }
-#conf/include/region.conf文件内容如下：[#]分区号必须为数字且不能重复，不要置0,0代表不分区
+#conf/include/region.conf文件内容如下：[#]分区号必须为数字且不能重复，0代表属于任何分区
 [1]
 172.17.95.133:8080
 172.17.95.134:8080
@@ -138,7 +147,7 @@ router [name] conf/include/router.conf;
 }
 #[name]是router起的唯一名,必填
 #conf/include/router.conf文件内容如下：
-[#]是nginx变量用于取关键字(多个变量用"|"分隔), 下面的取值第一列为[#]变量中得到的值，第二列为所属分区，0代表不分区
+[#]是nginx变量用于取关键字(多个变量用"|"分隔), 下面的取值第一列为[#]变量中得到的值，第二列为所属分区，0代表可以进入任何分区
 [http_host|http_fxdn|arg_fxdn]
 www.fxscm.net   0
 zzjdl.fxscm.net 0

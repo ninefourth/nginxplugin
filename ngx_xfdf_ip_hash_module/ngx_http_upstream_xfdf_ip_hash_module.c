@@ -462,7 +462,8 @@ ngx_xfdf_deal_peer_weight(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t w)
 ngx_http_upstream_rr_peer_t*
 ngx_upstream_region_peer(ngx_http_upstream_rr_peer_t *peer ,ngx_uint_t region)
 {
-	while( region!=0 && ngx_http_upstream_get_peer_region(peer)!= region){
+	ngx_uint_t r = ngx_http_upstream_get_peer_region(peer);
+	while(r!=0 && region!=0 && r!= region){
 		if(peer->next == NULL) {
 			break;
 		}
@@ -1400,7 +1401,8 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,void *data)
          peer = peer->next, i++)
     {
 		#if (NGX_HTTP_UPSTREAM_CHECK)
-    		if(need_region && exrrp->region!=0 && ngx_http_upstream_get_peer_region(peer)!= exrrp->region ){
+    		ngx_uint_t r= ngx_http_upstream_get_peer_region(peer);
+    		if(need_region && r!=0 && exrrp->region!=0 && r!= exrrp->region ){
     			continue;
     		}
 		#endif

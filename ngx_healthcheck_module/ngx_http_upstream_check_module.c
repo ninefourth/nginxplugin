@@ -1216,6 +1216,7 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                     if (n > 0){
                     	krcf = get_key_region_confs(loc_conf);
                     	if(krcf == NULL) return ;
+                    	krcf->count_key_template = 0;
                     	root = krg = krcf->key_regions;
                         buf[size]='\0';
                     	while ( *buf != '\0' ){
@@ -1880,7 +1881,7 @@ ngx_http_upstream_get_region_total_weight(void *fstp , ngx_uint_t region)
 
 	for( ; peer; peer=peer->next ) {
 		p = ngx_http_upstream_check_get_peer_by_peer(peer);
-		if(p->shm->region == region){
+		if(p->shm->region == region || p->shm->region == 0){
 			if(!p->shm->weight) {
 				p->shm->weight = p->weight;
 			}
@@ -3771,14 +3772,22 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 //    key_region_conf_t  data;
 //    ngx_binary_tree_node_t data;
     ngx_binary_tree_node_t *node=NULL ,node_data;
-    uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
+    void **cnfs;
+    //在nginx配置文件的if判断中变量赋值后，取不到request的location配置，所以借用err_status保存location配置地址
+    if(r->err_status){
+    	cnfs = (void**)(r->err_status);
+    	uclcf = cnfs[ngx_http_upstream_check_module.ctx_index];
+    	r->err_status = 0;
+    }else {
+    	uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
+    }
     if (uclcf == NULL){
-    	return 0;
+    	return default_region;
     }
     //
     krc = ngx_http_upstream_get_shm_key_region(uclcf);
     if(krc == NULL){
-    	return 0;
+    	return default_region;
     }
     //
     val.data=krc->variable;
@@ -3805,7 +3814,7 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 		}
 	}
 	if(node == NULL){
-		return 0;
+		return default_region;
 	}
 	return  ((ngx_uint_t)node->data) % key_region_key; //region
     /*
@@ -5364,7 +5373,7 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
         psh->weight   = 0;
         psh->v_weight = 0;
         psh->v_total_weight = 0;
-        psh->region = 0;
+        psh->region = default_region;
     }
 
 #if (NGX_HAVE_ATOMIC_OPS)
@@ -5474,6 +5483,13 @@ ngx_http_access_handler(ngx_http_request_t *r)
     return NGX_DECLINED;
 }
 
+static ngx_int_t
+ngx_http_rewrite_handler(ngx_http_request_t *r)
+{
+	//在nginx配置文件的if判断中变量赋值后，取不到request的location配置(因为phase使用了rewrite来处理ngx_http_script_if_code改变了配置)，所以借用err_status保存location配置地址，以后再还原
+	r->err_status = (ngx_uint_t)r->loc_conf;
+    return NGX_DECLINED;
+}
 
 static ngx_int_t
 ngx_http_upstream_modify_conf(ngx_conf_t *cf)
@@ -5488,6 +5504,13 @@ ngx_http_upstream_modify_conf(ngx_conf_t *cf)
         return NGX_ERROR;
     }
     *h = ngx_http_access_handler;
+
+    //在rewrite之前先拿到request的location_configure
+    h = ngx_array_push(&cmcf->phases[NGX_HTTP_REWRITE_PHASE].handlers);
+	if (h == NULL) {
+		return NGX_ERROR;
+	}
+	*h = ngx_http_rewrite_handler;
 
     return NGX_OK;
 }

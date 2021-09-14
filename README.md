@@ -4,4 +4,4 @@
 - ngx_http_endpoint_module 提供对外端点，用于外部干预nginx 
 - ngx_http_request_chain_module 自定义request filter
 
-./configure  --with-stream  --with-http_ssl_module --with-http_realip_module --add-module=./plugin/ngx_xfdf_ip_hash_module --add-module=./plugin/ngx_healthcheck_module --add-module=./plugin/ngx_http_endpoint_module --add-module=./plugin/ngx_http_request_chain_module
+./configure  --with-stream  --with-http_ssl_module --with-http_realip_module --add-module=./plugin/ngx_xfdf_ip_hash_module --add-module=./plugin/ngx_healthcheck_module --add-module=./plugin/ngx_http_endpoint_module --add-module=./plugin/ngx_http_request_chain_module 

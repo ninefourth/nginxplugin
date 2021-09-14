@@ -1,5 +1,9 @@
 #include "ngx_common_util.h"
 
+static ngx_str_t http_head=ngx_string("http_");
+static ngx_str_t http_arg=ngx_string("arg_");
+static ngx_str_t http_uri=ngx_string("uri");
+static ngx_str_t http_body=ngx_string("body_");
 
 ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c)
 {
@@ -69,17 +73,27 @@ u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t 
 //ngx_str_t to a hash code
 ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size)
 {
-    ngx_uint_t i;
-    ngx_uint_t hash = 89;
-    for (i = 0; i < size; i++) {
-	    hash = (hash * 5051 + s[i]) % 987631;
-	}
-    return hash;
+    return ngx_chars_2_hash2(s,size,89);
 }
 
 ngx_uint_t ngx_str_2_hash(ngx_str_t *s)
 {
 	return ngx_chars_2_hash(s->data,s->len);
+}
+
+ngx_uint_t ngx_str_2_hash2(ngx_str_t *s, ngx_uint_t factor)
+{
+	return ngx_chars_2_hash2(s->data,s->len,factor);
+}
+
+ngx_uint_t ngx_chars_2_hash2(u_char *s , size_t size , ngx_uint_t factor)
+{
+    ngx_uint_t i;
+    ngx_uint_t hash = factor;
+    for (i = 0; i < size; i++) {
+	    hash = (hash * 5051 + s[i]) % 987631;
+	}
+    return hash;
 }
 
 
@@ -295,6 +309,46 @@ ngx_str_t *ngx_http_get_post_param(ngx_http_request_t *r, u_char *name , size_t 
 		return value;
 	}
     return NULL;
+}
+
+
+ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t *desc)
+{
+	u_char	*ivar;
+	size_t	isz;
+	ngx_str_t *sh;
+	ngx_http_variable_value_t *vl;
+	ivar = var->data;
+	isz = var->len ;
+	desc->len=0;
+	if (var->len >= http_head.len && ngx_str_startwith( var->data, http_head.data, http_head.len) ) {//$http_
+		sh = ngx_http_get_variable_head(r,var->data+http_head.len , var->len - http_head.len);
+		if(sh){
+			desc->data = sh->data;
+			desc->len = sh->len;
+		}
+	} else if (var->len >= http_arg.len && ngx_str_startwith( var->data, http_arg.data, http_arg.len) ) {//$arg_
+		var->data = var->data+http_arg.len;
+		var->len = var->len - http_arg.len;
+		ngx_http_get_param_value(r,var->data,var->len, desc);
+	} else if ( !ngx_strncmp(var->data, http_uri.data, http_uri.len) ){//uri
+		desc->data = r->uri.data;
+		desc->len = r->uri.len;
+	} else if (var->len >= http_body.len && ngx_str_startwith( var->data, http_body.data, http_body.len) ) {//post body
+		var->data = var->data + http_body.len;
+		var->len = var->len - http_body.len;
+		desc->len=0;
+		ngx_http_get_post_param(r,var->data,var->len, desc);
+	} else {
+		vl = ngx_http_get_variable_req(r , var);
+		if(vl){
+			desc->data = vl->data;
+			desc->len = vl->len;
+		}
+	}
+	var->data = ivar;
+	var->len = isz;
+	return desc;
 }
 
 ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr)

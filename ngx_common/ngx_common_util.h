@@ -45,6 +45,8 @@ ngx_link_item_t *ngx_link_find_item(ngx_link_t *link ,ngx_link_item_t *data , ng
 /*string function*/
 ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size);
 ngx_uint_t ngx_str_2_hash(ngx_str_t *s);
+ngx_uint_t ngx_str_2_hash2(ngx_str_t *s, ngx_uint_t factor);
+ngx_uint_t ngx_chars_2_hash2(u_char *s , size_t size , ngx_uint_t factor);
 void cpy_chars(u_char *des , u_char *sor , size_t size);
 char *ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str);
 u_char *ngx_strcat(u_char* des , u_char* src , size_t len);
@@ -65,6 +67,8 @@ ngx_str_t *ngx_http_get_variable_head(ngx_http_request_t *r, u_char *name , size
 ngx_http_variable_value_t *ngx_http_get_variable_req(ngx_http_request_t *r, ngx_str_t *name);
 ngx_str_t *ngx_http_get_post_param(ngx_http_request_t *r, u_char *name , size_t len ,ngx_str_t *value);
 ngx_str_t *ngx_get_param_value(ngx_str_t *args , u_char *param , ngx_uint_t len , ngx_str_t *value);
+
+ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t *desc);
 
 //net
 ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr);

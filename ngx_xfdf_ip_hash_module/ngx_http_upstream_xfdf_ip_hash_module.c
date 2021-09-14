@@ -44,6 +44,7 @@ typedef struct {
                                              *每个数字范围在255之内故使用unsigend char表示一个数字，
                                              *四个数字就是四个unsigned char,所以使用一个long型表示unsigned char*
                                              */
+    ngx_str_t							hash_v_val; //hash计算的key
 
     u_char                             tries;//在给peer分配server的时候，记录已分配的server，为了均匀
 
@@ -85,6 +86,10 @@ typedef struct {
 } ngx_http_upstream_hash_peer_data_t;
 
 typedef struct {
+    ngx_str_t					hash_var;
+} ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t;
+
+typedef struct {
 	ngx_http_upstream_rr_peer_data_t  rrp;
 	ngx_uint_t                    region;
 } ngx_http_upstream_rr_ex_peer_data_t ;
@@ -95,8 +100,9 @@ static ngx_int_t ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc,
     void *data);
 static char *ngx_http_upstream_ip_hash(ngx_conf_t *cf, ngx_command_t *cmd,
     void *conf);
+static char *ngx_http_upstream_hash_var(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static void *ngx_http_upstream_xfdf_ip_hash_create_srv_conf(ngx_conf_t *cf);
-
+static void *ngx_http_upstream_xfdf_ip_hash_create_loc_conf(ngx_conf_t *cf);
 static ngx_int_t
 ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data);
 static ngx_int_t
@@ -124,7 +130,12 @@ static ngx_command_t  ngx_http_upstream_xfdf_ip_hash_commands[] = {
       0,
       0,
       NULL },
-
+	  { ngx_string("set_hash_variable"),
+		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE1,
+		ngx_http_upstream_hash_var,
+		NGX_HTTP_LOC_CONF_OFFSET,
+		0,//offsetof(ngx_http_headers_conf_t, headers),
+		NULL },
       ngx_null_command
 };
 
@@ -139,7 +150,7 @@ static ngx_http_module_t  ngx_http_upstream_xfdf_ip_hash_module_ctx = {
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf,  /* create server configuration */
     NULL,                                  /* merge server configuration */
 
-    NULL,                                  /* create location configuration */
+	ngx_http_upstream_xfdf_ip_hash_create_loc_conf, /* create location configuration */
     NULL                                   /* merge location configuration */
 };
 
@@ -175,6 +186,8 @@ static ngx_str_t str_rg=ngx_string(" region=");
 static ngx_str_t str_rt=ngx_string("\n");
 static ngx_str_t str_st=ngx_string(" {\n");
 static ngx_str_t str_ed=ngx_string(" }\n");
+
+static ngx_str_t hash_var=ngx_string("hashvar");
 
 ngx_http_variable_t *
 ngx_http_get_variable_by_name(ngx_conf_t *cf, ngx_str_t *name)
@@ -468,6 +481,7 @@ ngx_upstream_region_peer(ngx_http_upstream_rr_peer_t *peer ,ngx_uint_t region)
 			break;
 		}
 		peer = peer->next;
+		r = ngx_http_upstream_get_peer_region(peer);
 	}
 	return peer;
 }
@@ -513,6 +527,7 @@ static ngx_int_t
 ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
     ngx_http_upstream_srv_conf_t *us)
 {
+	ngx_str_t *hash_v = NULL ;
     struct sockaddr_in                     *sin;
 #if (NGX_HAVE_INET6)
     struct sockaddr_in6                    *sin6;
@@ -525,9 +540,10 @@ ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
     }
     
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *xfdfcf;
+    ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t		*xfdflcf;
 
     xfdfcf = ngx_http_conf_upstream_srv_conf(us, ngx_http_upstream_xfdf_ip_hash_module);
-
+    xfdflcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_xfdf_ip_hash_module);
     r->upstream->peer.data = &iphp->rrp;
 
     if (ngx_http_upstream_init_round_robin_peer(r, us) != NGX_OK) {
@@ -535,6 +551,18 @@ ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
     }
 
     r->upstream->peer.get = ngx_http_upstream_get_ip_hash_peer;
+
+
+	iphp->hash_v_val.len = 0;
+    if (xfdflcf->hash_var.len > 0) {
+    	hash_v = &xfdflcf->hash_var;
+    }else {
+    	hash_v = ngx_http_get_variable_head(r,hash_var.data ,hash_var.len);
+    }
+    if(hash_v != NULL) {
+    	get_request_value(r,hash_v, &iphp->hash_v_val);
+    }
+
 
     switch (r->connection->sockaddr->sa_family) {
 
@@ -603,10 +631,14 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
     hash = iphp->hash; //当前客户端ip初始哈希值,默认值89
 
     for ( ;; ) {
-        //根据xfdf_ip_hash指令的数值参数循环计算散列值，取用89，113，6271三个质数是为了计算结果均匀
-        for (i = 0; i < (ngx_uint_t) iphp->addrlen; i++) {
-            hash = (hash * 113 + iphp->addr[i]) % 6271;
-        }
+    	if(iphp->hash_v_val.len > 0) {
+    		hash = ngx_str_2_hash2(&iphp->hash_v_val,hash);
+    	} else {
+			//根据xfdf_ip_hash指令的数值参数循环计算散列值，取用89，113，6271三个质数是为了计算结果均匀
+			for (i = 0; i < (ngx_uint_t) iphp->addrlen; i++) {
+				hash = (hash * 113 + iphp->addr[i]) % 6271;
+			}
+    	}
 
         peer = iphp->rrp.peers->peer;//server
 
@@ -640,11 +672,13 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
         while (w >= pw) {
 //            w -= peer->weight;
             w -= pw;
-			#if (NGX_HTTP_UPSTREAM_CHECK)
-            peer = ngx_upstream_region_peer(peer->next,iphp->region);
-			#else
-            peer = peer->next;
-			#endif
+            if(peer->next != NULL) {
+				#if (NGX_HTTP_UPSTREAM_CHECK)
+				peer = ngx_upstream_region_peer(peer->next,iphp->region);
+				#else
+				peer = peer->next;
+				#endif
+            }
             p++;
             pw=peer->weight;
             #if (NGX_HTTP_UPSTREAM_CHECK)
@@ -1575,7 +1609,16 @@ failed:
 }
 
 /**-- end --**/
-
+static char *
+ngx_http_upstream_hash_var(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+	ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t		*xfdflcf = conf;
+	ngx_str_t                          *value;
+	value = cf->args->elts;
+	xfdflcf->hash_var.data = value[1].data;
+	xfdflcf->hash_var.len = value[1].len;
+	return NGX_CONF_OK;
+}
 
 static char *
 ngx_http_upstream_ip_hash(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
@@ -1630,6 +1673,22 @@ ngx_http_upstream_ip_hash(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     return NGX_CONF_OK;
 
+}
+
+
+static void *
+ngx_http_upstream_xfdf_ip_hash_create_loc_conf(ngx_conf_t *cf)
+{
+    ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t  *xfdflcf;
+
+    xfdflcf = ngx_pcalloc(cf->pool, sizeof(ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t));
+    if (xfdflcf == NULL) {
+        return NULL;
+    }
+
+    xfdflcf->hash_var.len =0;
+
+    return xfdflcf;
 }
 
 static void *

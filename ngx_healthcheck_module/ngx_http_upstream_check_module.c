@@ -913,10 +913,7 @@ static ngx_http_upstream_check_loc_confs_t loc_cnfs;
 static ngx_str_t one=ngx_string("1");
 static ngx_str_t zero=ngx_string("0");
 //static ngx_conf_t *check_conf = NULL ;
-static ngx_str_t http_head=ngx_string("http_");
-static ngx_str_t http_arg=ngx_string("arg_");
-static ngx_str_t http_uri=ngx_string("uri");
-static ngx_str_t http_body=ngx_string("body_");
+
 static ngx_str_t http_split=ngx_string("split_");
 
 static ngx_http_variable_t  ngx_http_custom_var_default = {
@@ -1467,38 +1464,6 @@ int_in_ints(ngx_uint_t *array , ngx_uint_t value ,size_t len)
 	return NGX_FALSE;
 }
 
-ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t *desc)
-{
-	ngx_str_t *sh;
-	ngx_http_variable_value_t *vl;
-	desc->len=0;
-	if (var->len >= http_head.len && ngx_str_startwith( var->data, http_head.data, http_head.len) ) {//$http_
-		sh = ngx_http_get_variable_head(r,var->data+http_head.len , var->len - http_head.len);
-		if(sh){
-			desc->data = sh->data;
-			desc->len = sh->len;
-		}
-	} else if (var->len >= http_arg.len && ngx_str_startwith( var->data, http_arg.data, http_arg.len) ) {//$arg_
-		var->data = var->data+http_arg.len;
-		var->len = var->len - http_arg.len;
-		ngx_http_get_param_value(r,var->data,var->len, desc);
-	} else if ( !ngx_strncmp(var->data, http_uri.data, http_uri.len) ){//uri
-		desc->data = r->uri.data;
-		desc->len = r->uri.len;
-	} else if (var->len >= http_body.len && ngx_str_startwith( var->data, http_body.data, http_body.len) ) {//post body
-		var->data = var->data + http_body.len;
-		var->len = var->len - http_body.len;
-		desc->len=0;
-		ngx_http_get_post_param(r,var->data,var->len, desc);
-	} else {
-		vl = ngx_http_get_variable_req(r , var);
-		if(vl){
-			desc->data = vl->data;
-			desc->len = vl->len;
-		}
-	}
-	return desc;
-}
 
 static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_item_list *items , ngx_int_t all)
 {
@@ -3773,15 +3738,19 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 //    ngx_binary_tree_node_t data;
     ngx_binary_tree_node_t *node=NULL ,node_data;
     void **cnfs;
-    //在nginx配置文件的if判断中变量赋值后，取不到request的location配置，所以借用err_status保存location配置地址
-    if(r->err_status){
-    	cnfs = (void**)(r->err_status);
-    	uclcf = cnfs[ngx_http_upstream_check_module.ctx_index];
-    	r->err_status = 0;
-    }else {
-    	uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
+
+    uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
+
+    if (uclcf == NULL || uclcf->shm_key_region_confs == NULL){
+        //在nginx配置文件的if判断中变量赋值后，取不到request的location配置，所以借用signature保存location配置相对地址
+    	 if(r->signature != NGX_HTTP_MODULE){
+			cnfs = (void**)((ngx_uint_t)r->srv_conf + r->signature );
+			uclcf = cnfs[ngx_http_upstream_check_module.ctx_index];
+			r->signature = NGX_HTTP_MODULE;
+		}
     }
-    if (uclcf == NULL){
+
+    if(uclcf == NULL) {
     	return default_region;
     }
     //
@@ -5486,9 +5455,18 @@ ngx_http_access_handler(ngx_http_request_t *r)
 static ngx_int_t
 ngx_http_rewrite_handler(ngx_http_request_t *r)
 {
-	//在nginx配置文件的if判断中变量赋值后，取不到request的location配置(因为phase使用了rewrite来处理ngx_http_script_if_code改变了配置)，所以借用err_status保存location配置地址，以后再还原
-	r->err_status = (ngx_uint_t)r->loc_conf;
-    return NGX_DECLINED;
+	//在nginx配置文件的if判断中变量赋值后，取不到request的location配置(因为phase使用了rewrite来处理ngx_http_script_if_code改变了配置)，所以借用signature保存location配置地址，以后再还原
+	r->signature =  (ngx_uint_t)r->loc_conf - (ngx_uint_t)r->srv_conf;
+//	r->http_connection->conf_ctx->loc_conf = r->loc_conf;
+	return NGX_DECLINED;
+}
+
+static ngx_int_t
+ngx_http_log_handler(ngx_http_request_t *r)
+{
+	//还原先前借用的signature值,对于 304,302状态的请求不会执行access，会直接到log
+	r->signature = NGX_HTTP_MODULE;
+	return NGX_DECLINED;
 }
 
 static ngx_int_t
@@ -5511,6 +5489,12 @@ ngx_http_upstream_modify_conf(ngx_conf_t *cf)
 		return NGX_ERROR;
 	}
 	*h = ngx_http_rewrite_handler;
+	//request链的最后一步日志处理
+	h = ngx_array_push(&cmcf->phases[NGX_HTTP_LOG_PHASE].handlers);
+	if (h == NULL) {
+		return NGX_ERROR;
+	}
+	*h = ngx_http_log_handler;
 
     return NGX_OK;
 }

@@ -15,3 +15,27 @@ upstream store {
     server 192.168.7.205:8085 weight=2 max_fails=3 fail_timeout=5s;
     xfdf_ip_hash consistent; #固化hash，当节点变化尽量不变更ip负载
 }
+
+自定义hash键:
+若根据不同场景负载到upstream不使用ip而是灵活使用参数，有两种方法
+1.使用指令set_hash_variable指定键，指令可用于location,if中
+location /store/ {
+...
+    if ( $forgray = 1 ){
+        set_hash_variable arg_a;
+        set $psurl http://store;
+    }
+...
+}
+2.在location中加入消息头hashVar告诉解析器要使用的变量名，负载计算时会使用该变量名对应的值做hash
+location /store1/ {
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+ 
+    set_hash_variable 'http_fxdn';
+    proxy_set_header hashVar 'http_fxdn'; #设置这里
+
+    proxy_pass http://127.0.0.1:8111/store/;
+}
+#这里的意思是，告诉解析器hash计算要使用请求头里的fxdn这个数据

@@ -16,7 +16,7 @@ upstream store {
     xfdf_ip_hash consistent; #固化hash，当节点变化尽量不变更ip负载
 }
 
-自定义hash键:
+负载均衡自定义hash键:
 若根据不同场景负载到upstream不使用ip而是灵活使用参数，有两种方法
 1.使用指令set_hash_variable指定键，指令可用于location,if中
 location /store/ {
@@ -27,6 +27,7 @@ location /store/ {
     }
 ...
 }
+#当forgray = 1时，负载的键取 url中的参数a。注意：当指令在location中时在此作用域中有效。
 2.在location中加入消息头hashVar告诉解析器要使用的变量名，负载计算时会使用该变量名对应的值做hash
 location /store1/ {
     proxy_set_header Host $host;

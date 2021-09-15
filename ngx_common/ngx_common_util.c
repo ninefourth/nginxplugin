@@ -96,6 +96,26 @@ ngx_uint_t ngx_chars_2_hash2(u_char *s , size_t size , ngx_uint_t factor)
     return hash;
 }
 
+ngx_uint_t ngx_factors[] ={71,167,271,389,503,631,757,883,1021,1153,1301,1471,1609,1777,1949,2099,2273,2417,2593,
+		2719,2861,3037,3209,3359,3527,3673,3851,4019,4211,4373,4561,4733,4931,5059,5233,5417,5563,5717,5867,6067};
+
+ngx_uint_t ngx_str_2_hash_evenly(u_char *s , size_t size)
+{
+	ngx_uint_t sz;
+	sz = sizeof(ngx_factors)/sizeof(ngx_factors[0]);
+    ngx_uint_t i,j = 0;
+    ngx_uint_t hash = ngx_factors[j++];
+    for (i = 0; i < size; i++) {
+    	if( j + 2 > sz) {
+    		j = 0;
+    	}
+    	hash = hash * ngx_factors[j++] + s[i] ;
+    	hash %= ngx_factors[j++];
+
+//	    hash = (hash * ngx_factors[j++] + s[i]) % ngx_factors[j++];
+	}
+    return hash;
+}
 
 void cpy_chars(u_char *des , u_char *sor , size_t size){
 	for( ; size-- >0; des++ ,sor++) {

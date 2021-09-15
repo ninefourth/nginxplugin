@@ -47,6 +47,7 @@ ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size);
 ngx_uint_t ngx_str_2_hash(ngx_str_t *s);
 ngx_uint_t ngx_str_2_hash2(ngx_str_t *s, ngx_uint_t factor);
 ngx_uint_t ngx_chars_2_hash2(u_char *s , size_t size , ngx_uint_t factor);
+ngx_uint_t ngx_str_2_hash_evenly(u_char *s , size_t size);
 void cpy_chars(u_char *des , u_char *sor , size_t size);
 char *ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str);
 u_char *ngx_strcat(u_char* des , u_char* src , size_t len);

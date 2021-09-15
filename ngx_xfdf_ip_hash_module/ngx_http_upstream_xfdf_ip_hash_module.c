@@ -103,8 +103,8 @@ static char *ngx_http_upstream_ip_hash(ngx_conf_t *cf, ngx_command_t *cmd,
 static char *ngx_http_upstream_hash_var(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 static void *ngx_http_upstream_xfdf_ip_hash_create_srv_conf(ngx_conf_t *cf);
 static void *ngx_http_upstream_xfdf_ip_hash_create_loc_conf(ngx_conf_t *cf);
-static ngx_int_t
-ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data);
+static char *ngx_http_upstream_xfdf_ip_hash_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child);
+static ngx_int_t ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data);
 static ngx_int_t
 ngx_http_upstream_init_chash_peer(ngx_http_request_t *r,
     ngx_http_upstream_srv_conf_t *us);
@@ -134,7 +134,7 @@ static ngx_command_t  ngx_http_upstream_xfdf_ip_hash_commands[] = {
 		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE1,
 		ngx_http_upstream_hash_var,
 		NGX_HTTP_LOC_CONF_OFFSET,
-		0,//offsetof(ngx_http_headers_conf_t, headers),
+		offsetof(ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t, hash_var),
 		NULL },
       ngx_null_command
 };
@@ -151,7 +151,7 @@ static ngx_http_module_t  ngx_http_upstream_xfdf_ip_hash_module_ctx = {
     NULL,                                  /* merge server configuration */
 
 	ngx_http_upstream_xfdf_ip_hash_create_loc_conf, /* create location configuration */
-    NULL                                   /* merge location configuration */
+	ngx_http_upstream_xfdf_ip_hash_merge_loc_conf  /* merge location configuration */
 };
 
 //模块入口
@@ -632,7 +632,7 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
 
     for ( ;; ) {
     	if(iphp->hash_v_val.len > 0) {
-    		hash = ngx_str_2_hash2(&iphp->hash_v_val,hash);
+    		hash = ngx_str_2_hash_evenly(iphp->hash_v_val.data,iphp->hash_v_val.len);
     	} else {
 			//根据xfdf_ip_hash指令的数值参数循环计算散列值，取用89，113，6271三个质数是为了计算结果均匀
 			for (i = 0; i < (ngx_uint_t) iphp->addrlen; i++) {
@@ -1613,10 +1613,13 @@ static char *
 ngx_http_upstream_hash_var(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
 	ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t		*xfdflcf = conf;
-	ngx_str_t                          *value;
+	ngx_str_t                          *value, *valcnf;
 	value = cf->args->elts;
-	xfdflcf->hash_var.data = value[1].data;
-	xfdflcf->hash_var.len = value[1].len;
+	valcnf = (ngx_str_t *) ((char *) xfdflcf + cmd->offset);
+	valcnf->data = value[1].data;
+	valcnf->len = value[1].len;
+//	xfdflcf->hash_var.data = value[1].data;
+//	xfdflcf->hash_var.len = value[1].len;
 	return NGX_CONF_OK;
 }
 
@@ -1690,6 +1693,22 @@ ngx_http_upstream_xfdf_ip_hash_create_loc_conf(ngx_conf_t *cf)
 
     return xfdflcf;
 }
+
+
+static char *
+ngx_http_upstream_xfdf_ip_hash_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child)
+{
+	ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t *prev = parent;
+	ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t *conf = child;
+
+    if (conf->hash_var.len == 0) {
+        conf->hash_var.data = prev->hash_var.data;
+        conf->hash_var.len = prev->hash_var.len;
+    }
+
+    return NGX_CONF_OK;
+}
+
 
 static void *
 ngx_http_upstream_xfdf_ip_hash_create_srv_conf(ngx_conf_t *cf)

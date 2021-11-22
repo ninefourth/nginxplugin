@@ -147,8 +147,9 @@ router [name] conf/include/router.conf;
 }
 #[name]是router起的唯一名,必填
 #conf/include/router.conf文件内容如下：
-[#]是nginx变量用于取关键字(多个变量用"|"分隔), 下面的取值第一列为[#]变量中得到的值，第二列为所属分区，0代表可以进入任何分区
+[#]是nginx变量用于取关键字(多个变量用"|"分隔), 下面的取值第一列为[#]变量中得到的值，可以使用*做通配符，第二列为所属分区，0代表可以进入任何分区
 [http_host|http_fxdn|arg_fxdn]
+*.s1.fxscm.*    2
 www.fxscm.net   0
 zzjdl.fxscm.net 0
 fzy.sm7.fxscm.net   1

@@ -87,14 +87,19 @@ struct {
 	ngx_uint_t      key_hash;
 	ngx_uint_t      region;
 } key_region_conf_t ;*/
+#define rg_var_count 40
+#define str_count 50
+#define key_tpl_count 20
+typedef u_char string[str_count];
 
 typedef struct  {
 //	key_region_conf_t          key_regions[key_region_count]; //1st node is root
 	ngx_binary_tree_node_t      key_regions[key_region_count]; //1st node is root; data is key_hash*1000+region
-	u_char                   variable[40];
-	ngx_uint_t                    count;
+	u_char                   variable[rg_var_count];
+	ngx_uint_t                count;
 	ngx_uint_t                router_name_hash;
-	u_char					key_template[20];//the template of key , such as www.*.fxscm , left is high 4bit ,right is low 4bit
+//	u_char					key_template[20];//the template of key , such as www.*.fxscm , left is high 4bit ,right is low 4bit
+	string					key_template[key_tpl_count]; //region and the template of key , such as 2www.*.fxscm, 1st byte is region, rest is key template
 	size_t					count_key_template;
 } key_region_confs_t ;
 
@@ -1092,6 +1097,17 @@ void ngx_reload_var_conf(ngx_str_t *f , ngx_str_t *var_name /*ngx_int_t flag*/)
 
 }
 
+void ngx_init_upstream_region(ngx_uint_t up_name_hash)
+{
+	size_t    i;
+	ngx_http_upstream_check_peers_shm_t *p_shm = check_peers_ctx->peers_shm ;
+	for (i = 0; p_shm && i < check_peers_ctx->peers.nelts; i++) {
+		 if( p_shm->peers[i].upstream_name == up_name_hash ){
+			 p_shm->peers[i].region = default_region;
+		 }
+	 }
+}
+
 void ngx_set_region(ngx_uint_t up_name_hash , ngx_str_t *server, ngx_uint_t region)
 {
 	size_t    i;
@@ -1131,6 +1147,7 @@ void ngx_reload_region_conf(ngx_str_t *f , ngx_uint_t up_name_hash)
                 if (buf != NULL){
                 	n = ngx_read_fd(fd, buf, size);
                     if (n > 0){
+                    	ngx_init_upstream_region(up_name_hash);
                         buf[size]='\0';
                     	while ( *buf != '\0' ){
                     	    sz = read_line(buf);
@@ -1190,8 +1207,8 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
 {
 	ngx_fd_t          fd;
 	size_t            size;
-	u_char            *s_t, *buf ,*hdbuf,key_tpl ;
-	ngx_int_t			p1,p2,p;
+	u_char            *s_t, *buf ,*hdbuf;//,key_tpl ;
+	//ngx_int_t			p1,p2,p;
 	ssize_t           n;
 	ngx_file_info_t   fi;
 	//
@@ -1199,6 +1216,7 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
 	ngx_str_t s_token ;
 	key_region_confs_t  *krcf = NULL;
 	ngx_binary_tree_node_t   *krg, *root;
+	u_char			*wck;
 
 	fd = ngx_open_file(f->data, NGX_FILE_RDONLY, NGX_FILE_OPEN, 0);
 
@@ -1212,9 +1230,11 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                 	n = ngx_read_fd(fd, buf, size);
                     if (n > 0){
                     	krcf = get_key_region_confs(loc_conf);
-                    	if(krcf == NULL) return ;
+                    	if(krcf == NULL) goto end ;
                     	krcf->count_key_template = 0;
+                    	krcf->count = 0;
                     	root = krg = krcf->key_regions;
+//                    	ngx_init_binary_tree(root);
                         buf[size]='\0';
                     	while ( *buf != '\0' ){
                     	    sz = read_line(buf);
@@ -1224,42 +1244,26 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                                 } else {
                                 	if (*buf != '#'){
                                 		s_t = ngx_str_sch_next_trimtoken(buf ,sz ,' ',&s_token);
-										if(s_token.len > 0 && s_token.len < sz) {
-//											krg->key_hash = ngx_str_2_hash(&s_token);
-											p1 = ngx_str_index_of(s_token.data,s_token.len,'(',0);
-											//如果key中有"(" ,如：(5)zzjdl.fxscm.net(-3)
-											if( p1 >= 0 ){
-												p2 = ngx_str_index_of(s_token.data,s_token.len ,')',p1+1);
-												p=ngx_str_to_int(s_token.data+p1+1, p2-p1-1);
-												if(p1 == 0) {//在首部
-													key_tpl = (u_char) p << 4 ; //left token
-													p1 = ngx_str_index_of(s_token.data,s_token.len,'(',p2+1);
-													if( p1 > 0 ){//在尾部
-														p2 = ngx_str_index_of(s_token.data,s_token.len ,')',p1+1);
-														p=ngx_str_to_int(s_token.data+p1+1, p2-p1-1);
-														key_tpl += p; //right token
-													}
-												}else {
-													key_tpl = p;
-												}
-												krcf->key_template[krcf->count_key_template++] = key_tpl;
+										if(s_token.len > 0 && s_token.len < sz && s_t) {
+											if( ngx_str_index_of(s_token.data,s_token.len,'*',0) >= 0){//wildchar
+												wck = (u_char*)krcf->key_template[krcf->count_key_template++];
+												cpy_chars(wck+sizeof(u_char),s_token.data,s_token.len);
+												s_token.len = sz - (s_t - buf) ;
+												s_token.data = s_t;
+												wck[0] = (u_char)ngx_atoi(s_token.data, s_token.len);
+											} else {
+													keyregion = ngx_str_2_hash(&s_token);
+													s_token.len = sz - (s_t - buf) ;
+													s_token.data = s_t;
+													keyregion = keyregion * key_region_key +ngx_atoi(s_token.data, s_token.len);
+//													if(root == krg) {
+													ngx_init_binary_tree(krg);
+//													}
+													krg->data = (void*)keyregion;
+													ngx_binary_tree_add_node(root, krg,node_compare);
+													krg++;
+													krcf->count++;
 											}
-											//
-											keyregion = ngx_str_2_hash(&s_token);
-	                                		s_token.len = sz - (s_t - buf) ;
-	                                		s_token.data = s_t;
-	                                		keyregion = keyregion * key_region_key +ngx_atoi(s_token.data, s_token.len);
-//											krg->region = ngx_atoi(s_token.data, s_token.len);
-											if(root == krg) {
-//												ngx_init_binary_tree(&krg->node);
-												ngx_init_binary_tree(krg);
-											}
-//											krg->node.data = krg;
-//											ngx_binary_tree_add_node(&root->node,&krg->node,node_compare);
-											krg->data = (void*)keyregion;
-											ngx_binary_tree_add_node(root, krg,node_compare);
-											krg++;
-											krcf->count++;
 										} else {
 											goto tail;
 										}
@@ -1273,20 +1277,17 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                     	    }
                     	    buf++;
                     	}
-
                     }
+                	end:
                     free(hdbuf);
                 }
-
             }
     	}
 
     	if (ngx_close_file(fd) == NGX_FILE_ERROR) {
 //            ngx_log_error(NGX_LOG_ALERT, cf->log, ngx_errno,ngx_close_file_n " %s failed",f->data);
         }
-
     }
-
 }
 
 void ngx_reload_router(ngx_str_t *name , ngx_str_t *cnf)
@@ -1349,11 +1350,13 @@ void ngx_add_router_item(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_str_t *k
 				root = ngx_binary_tree_add_node(root, node, node_compare);
 				if(root == node || krc->count == 0){// root==node 意味着节点原来不存在是新增加，否则node新占位无效(替换了原节点中的值)
 					krc->count++;
-				}
-				//
-				cnf_file = &loc_cnfs.loc_confs[i]->conf;
-				if(cnf_file && cnf_file->len>0){
-					ngx_append_router_conf_file(pool ,cnf_file,key,region);
+					//
+					cnf_file = &loc_cnfs.loc_confs[i]->conf;
+					if(cnf_file && cnf_file->len>0){
+						ngx_append_router_conf_file(pool ,cnf_file,key,region);
+					}
+				} else {
+					root->data = node->data;
 				}
 				//
 				break;
@@ -3731,21 +3734,25 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 {
     ngx_http_upstream_check_loc_conf_t    *uclcf;
     key_region_confs_t     *krc;
-    ngx_str_t val,desc ,s_token;
+    ngx_str_t val,desc ,s_token,tpl_token;
     ngx_uint_t  hash,k=0,sz;
     u_char *s_t;
 //    key_region_conf_t  data;
 //    ngx_binary_tree_node_t data;
     ngx_binary_tree_node_t *node=NULL ,node_data;
     void **cnfs;
+    size_t	i_tpl = 0 , k_tpl=0 , sz_tpl,r_tpl, h_tpl =0 , t_tpl=0;
+    u_char	*tpl,*s_tpl,*cmp_tpl,*tmp_cmp_tpl =0;
 
     uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
 
     if (uclcf == NULL || uclcf->shm_key_region_confs == NULL){
         //在nginx配置文件的if判断中变量赋值后，取不到request的location配置，所以借用signature保存location配置相对地址
     	 if(r->signature != NGX_HTTP_MODULE){
-			cnfs = (void**)((ngx_uint_t)r->srv_conf + r->signature );
+//			cnfs = (void**)((ngx_uint_t)r->signature + (ngx_uint_t)r->main_conf) ;
+    		cnfs = (void**)r->lowcase_index;
 			uclcf = cnfs[ngx_http_upstream_check_module.ctx_index];
+			r->lowcase_index = r->signature;
 			r->signature = NGX_HTTP_MODULE;
 		}
     }
@@ -3759,6 +3766,7 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
     	return default_region;
     }
     //
+    find:
     val.data=krc->variable;
     val.len=strlen((char*)val.data);
     //
@@ -3771,11 +3779,55 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 			//
 			get_request_value(r,&s_token,&desc);
 			if(desc.len > 0){
-				hash = ngx_str_2_hash(&desc);
-				node_data.data = (void*)(hash * key_region_key) ;
-				node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
-				if(node != NULL){
-					break;
+				if(i_tpl == 0){
+					hash = ngx_str_2_hash(&desc);
+					node_data.data = (void*)(hash * key_region_key) ;
+					node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
+					if(node != NULL){
+						break;
+					}
+				}else {
+					i_tpl=0;
+					loop:
+					for( ;i_tpl<krc->count_key_template ;i_tpl++){
+						k_tpl= 0;
+						tpl = (u_char*)krc->key_template[i_tpl];
+						r_tpl = (size_t)tpl[0];
+						tpl = tpl +sizeof(u_char);
+						sz_tpl = ngx_str_find_element_count(tpl, strlen((char*)tpl) ,'*');
+						if(tpl[0] != '*') h_tpl=1;//键不是以*开始，即是要求对比必须是从0位置就开始相等
+						if(tpl[strlen((char*)tpl)-1] != '*') t_tpl=1;//键不是以*结尾，即是要求结尾部分相等
+						while( k_tpl++ < sz_tpl){
+							s_tpl = ngx_str_sch_next_trimtoken(tpl ,strlen((char*)tpl) ,'*',&tpl_token);
+							if(tpl_token.len > 0){
+								tpl = s_tpl;
+								cmp_tpl = ngx_strstrn(desc.data,(char*)tpl_token.data,tpl_token.len-1);
+								if( cmp_tpl == NULL ){
+									i_tpl++;
+									goto loop;
+								}else {
+									if(k_tpl == 1 && h_tpl == 1){
+										if(cmp_tpl != desc.data){
+											i_tpl++;
+											goto loop;
+										}
+									}
+									if(k_tpl == sz_tpl && t_tpl == 1){
+										if(cmp_tpl[tpl_token.len-1] != desc.data[desc.len-1]){
+											i_tpl++;
+											goto loop;
+										}
+									}
+									if(tmp_cmp_tpl >= cmp_tpl){//保证顺序
+										i_tpl++;
+										goto loop;
+									}
+									tmp_cmp_tpl = cmp_tpl;
+								}
+							}
+						}
+						return r_tpl;
+					}
 				}
 			}
 		}else {
@@ -3783,7 +3835,14 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 		}
 	}
 	if(node == NULL){
-		return default_region;
+		if(krc->count_key_template > 0 && i_tpl==0){
+			i_tpl++;
+			k=0;
+			goto find;
+		}else {
+			return default_region;
+		}
+		//
 	}
 	return  ((ngx_uint_t)node->data) % key_region_key; //region
     /*
@@ -5456,7 +5515,10 @@ static ngx_int_t
 ngx_http_rewrite_handler(ngx_http_request_t *r)
 {
 	//在nginx配置文件的if判断中变量赋值后，取不到request的location配置(因为phase使用了rewrite来处理ngx_http_script_if_code改变了配置)，所以借用signature保存location配置地址，以后再还原
-	r->signature =  (ngx_uint_t)r->loc_conf - (ngx_uint_t)r->srv_conf;
+	//printf(" -1--------- %ld \n",(ngx_uint_t)r->loc_conf);
+//	r->signature =  (ngx_uint_t)r->loc_conf - (ngx_uint_t)r->main_conf;
+	r->signature = r->lowcase_index;
+	r->lowcase_index = (ngx_uint_t)r->loc_conf;
 //	r->http_connection->conf_ctx->loc_conf = r->loc_conf;
 	return NGX_DECLINED;
 }
@@ -5465,7 +5527,10 @@ static ngx_int_t
 ngx_http_log_handler(ngx_http_request_t *r)
 {
 	//还原先前借用的signature值,对于 304,302状态的请求不会执行access，会直接到log
-	r->signature = NGX_HTTP_MODULE;
+	if(r->signature != NGX_HTTP_MODULE){
+		r->lowcase_index = r->signature;
+		r->signature = NGX_HTTP_MODULE;
+	}
 	return NGX_DECLINED;
 }
 

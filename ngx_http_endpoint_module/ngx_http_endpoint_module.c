@@ -246,7 +246,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     			ngx_reload_router(router_name ,&f);
     			buf = append_printf(r->pool, &sucs);
         	}
-    	} else if( resource->nelts == 4 ){// /router/[name]/add/[variable]
+    	} else if( resource->nelts == 4 ){// /router/[name]/[add|get]/[variable]
     		ngx_str_t *router_name = &value[1]; //router name
     		if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"add", 3) == 0){
     			ngx_str_t *v = &value[3];

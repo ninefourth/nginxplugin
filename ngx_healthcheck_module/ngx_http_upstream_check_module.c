@@ -11,9 +11,8 @@
 #include "ngx_http_upstream_xfdf_ip_hash_module.h"
 #endif
 
-typedef struct ngx_http_upstream_check_peer_s ngx_http_upstream_check_peer_t;
-typedef struct ngx_http_upstream_check_srv_conf_s
-    ngx_http_upstream_check_srv_conf_t;
+typedef struct ngx_http_upstream_check_peer_s	ngx_http_upstream_check_peer_t;
+typedef struct ngx_http_upstream_check_srv_conf_s	ngx_http_upstream_check_srv_conf_t;
 
 
 #pragma pack(push, 1)
@@ -70,6 +69,7 @@ typedef struct {
 } ngx_http_upstream_check_ctx_t;
 
 #define upstream_region_count 20
+
 typedef struct {
 	ngx_uint_t      upstream_hash;
 	ngx_str_t       conf;
@@ -89,7 +89,7 @@ struct {
 } key_region_conf_t ;*/
 #define rg_var_count 40
 #define str_count 50
-#define key_tpl_count 20
+#define key_tpl_count 100
 typedef u_char string[str_count];
 
 typedef struct  {
@@ -99,7 +99,7 @@ typedef struct  {
 	ngx_uint_t                count;
 	ngx_uint_t                router_name_hash;
 //	u_char					key_template[20];//the template of key , such as www.*.fxscm , left is high 4bit ,right is low 4bit
-	string					key_template[key_tpl_count]; //region and the template of key , such as 2www.*.fxscm, 1st byte is region, rest is key template
+	u_char					key_template[str_count][key_tpl_count]; //region and the template of key , such as 2www.*.fxscm, 1st byte is region, rest is key template
 	size_t					count_key_template;
 } key_region_confs_t ;
 
@@ -1234,7 +1234,7 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                     	krcf->count_key_template = 0;
                     	krcf->count = 0;
                     	root = krg = krcf->key_regions;
-//                    	ngx_init_binary_tree(root);
+                    	ngx_init_binary_tree(root);
                         buf[size]='\0';
                     	while ( *buf != '\0' ){
                     	    sz = read_line(buf);
@@ -1382,23 +1382,80 @@ void ngx_set_router_variable(ngx_str_t *router_name , ngx_str_t *var)
 	}
 }
 
+ngx_int_t pri_ngx_get_key_region(key_region_confs_t *krc , ngx_str_t *var)
+{
+	ngx_int_t   ret = -1;
+	ngx_binary_tree_node_t  *node,node_data;
+	node_data.data = (void*)( ngx_str_2_hash(var)*key_region_key);
+	node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
+	if(node){
+		ret = ((ngx_uint_t)node->data) % key_region_key; //region
+	}
+	return ret;
+}
+
+ngx_int_t pri_ngx_get_key_tpl_region(key_region_confs_t *krc , ngx_str_t *desc)
+{
+	size_t	i_tpl = 0 , k_tpl=0 , sz_tpl,r_tpl, h_tpl =0 , t_tpl=0;
+	u_char	*tpl,*s_tpl,*cmp_tpl,*tmp_cmp_tpl =0;
+	ngx_int_t ret = -1;
+	ngx_str_t tpl_token;
+	i_tpl=0;
+
+	loop:
+	for( ;i_tpl<krc->count_key_template ;i_tpl++){
+		k_tpl= 0;
+		tpl = (u_char*)krc->key_template[i_tpl];
+		r_tpl = (size_t)tpl[0];
+		tpl = tpl +sizeof(u_char);
+		sz_tpl = ngx_str_find_element_count(tpl, strlen((char*)tpl) ,'*');
+		if(tpl[0] != '*') h_tpl=1;//键不是以*开始，即是要求对比必须是从0位置就开始相等
+		if(tpl[strlen((char*)tpl)-1] != '*') t_tpl=1;//键不是以*结尾，即是要求结尾部分相等
+		while( k_tpl++ < sz_tpl){
+			s_tpl = ngx_str_sch_next_trimtoken(tpl ,strlen((char*)tpl) ,'*',&tpl_token);
+			if(tpl_token.len > 0){
+				tpl = s_tpl;
+				cmp_tpl = ngx_strstrn(desc->data,(char*)tpl_token.data,tpl_token.len-1);
+				if( cmp_tpl == NULL ){
+					i_tpl++;
+					goto loop;
+				}else {
+					if(k_tpl == 1 && h_tpl == 1){
+						if(cmp_tpl != desc->data){
+							i_tpl++;
+							goto loop;
+						}
+					}
+					if(k_tpl == sz_tpl && t_tpl == 1){
+						if(cmp_tpl[tpl_token.len-1] != desc->data[desc->len-1]){
+							i_tpl++;
+							goto loop;
+						}
+					}
+					if(tmp_cmp_tpl >= cmp_tpl){//保证顺序
+						i_tpl++;
+						goto loop;
+					}
+					tmp_cmp_tpl = cmp_tpl;
+				}
+			}
+		}
+		ret = r_tpl;
+	}
+	return ret;
+}
+
 ngx_int_t ngx_get_router_variable_region(ngx_str_t *router_name , ngx_str_t *var)
 {
 	ngx_int_t   ret = -1;
 	if(loc_cnfs.count >0) {
 		ngx_uint_t i;
 		key_region_confs_t *krc;
-		ngx_binary_tree_node_t  *node,node_data;
 		for(i=0;i<loc_cnfs.count;i++){
 			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
 					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
 				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
-				if(krc == NULL) return -2;
-				node_data.data = (void*)( ngx_str_2_hash(var)*key_region_key);
-				node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
-				if(node){
-					return  ((ngx_uint_t)node->data) % key_region_key; //region
-				}
+				return pri_ngx_get_key_region(krc,var);
 			}
 		}
 	}
@@ -3719,7 +3776,7 @@ key_region_confs_t *ngx_http_upstream_get_shm_key_region(ngx_http_upstream_check
 		if(check_peers_ctx != NULL && check_peers_ctx->peers_shm != NULL){
 			key_region_confs_t *cfs = check_peers_ctx->peers_shm->key_region;
 			while( i<var_key_region_max_count ){
-				if (cfs[i].count >0 && cfs[i].router_name_hash == rn_hash){
+				if ( (cfs[i].count >0 || cfs[i].count_key_template > 0) && cfs[i].router_name_hash == rn_hash){
 					uclcf->shm_key_region_confs = &cfs[i];
 					break;
 				}
@@ -3730,19 +3787,40 @@ key_region_confs_t *ngx_http_upstream_get_shm_key_region(ngx_http_upstream_check
 	return uclcf->shm_key_region_confs;
 }
 
+ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc)
+{
+	ngx_int_t ret = -1;
+	key_region_confs_t *krc = NULL;
+
+	if(loc_cnfs.count >0) {
+		ngx_uint_t i;
+		for(i=0;i<loc_cnfs.count;i++){
+			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
+					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
+				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
+			}
+		}
+	}
+
+	if(krc !=NULL){
+		ret=pri_ngx_get_key_region(krc,desc);
+		if(ret < 0){
+			ret=pri_ngx_get_key_tpl_region(krc,desc);
+		}
+	}
+
+	return ret;
+}
+
 ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 {
     ngx_http_upstream_check_loc_conf_t    *uclcf;
     key_region_confs_t     *krc;
-    ngx_str_t val,desc ,s_token,tpl_token;
-    ngx_uint_t  hash,k=0,sz;
+    ngx_str_t val,desc ,s_token;
+    ngx_uint_t  k=0,sz;
     u_char *s_t;
-//    key_region_conf_t  data;
-//    ngx_binary_tree_node_t data;
-    ngx_binary_tree_node_t *node=NULL ,node_data;
     void **cnfs;
-    size_t	i_tpl = 0 , k_tpl=0 , sz_tpl,r_tpl, h_tpl =0 , t_tpl=0;
-    u_char	*tpl,*s_tpl,*cmp_tpl,*tmp_cmp_tpl =0;
+    ngx_int_t	r_tpl = default_region;
 
     uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
 
@@ -3762,11 +3840,11 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
     }
     //
     krc = ngx_http_upstream_get_shm_key_region(uclcf);
+
     if(krc == NULL){
     	return default_region;
     }
     //
-    find:
     val.data=krc->variable;
     val.len=strlen((char*)val.data);
     //
@@ -3779,72 +3857,18 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 			//
 			get_request_value(r,&s_token,&desc);
 			if(desc.len > 0){
-				if(i_tpl == 0){
-					hash = ngx_str_2_hash(&desc);
-					node_data.data = (void*)(hash * key_region_key) ;
-					node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
-					if(node != NULL){
-						break;
-					}
-				}else {
-					i_tpl=0;
-					loop:
-					for( ;i_tpl<krc->count_key_template ;i_tpl++){
-						k_tpl= 0;
-						tpl = (u_char*)krc->key_template[i_tpl];
-						r_tpl = (size_t)tpl[0];
-						tpl = tpl +sizeof(u_char);
-						sz_tpl = ngx_str_find_element_count(tpl, strlen((char*)tpl) ,'*');
-						if(tpl[0] != '*') h_tpl=1;//键不是以*开始，即是要求对比必须是从0位置就开始相等
-						if(tpl[strlen((char*)tpl)-1] != '*') t_tpl=1;//键不是以*结尾，即是要求结尾部分相等
-						while( k_tpl++ < sz_tpl){
-							s_tpl = ngx_str_sch_next_trimtoken(tpl ,strlen((char*)tpl) ,'*',&tpl_token);
-							if(tpl_token.len > 0){
-								tpl = s_tpl;
-								cmp_tpl = ngx_strstrn(desc.data,(char*)tpl_token.data,tpl_token.len-1);
-								if( cmp_tpl == NULL ){
-									i_tpl++;
-									goto loop;
-								}else {
-									if(k_tpl == 1 && h_tpl == 1){
-										if(cmp_tpl != desc.data){
-											i_tpl++;
-											goto loop;
-										}
-									}
-									if(k_tpl == sz_tpl && t_tpl == 1){
-										if(cmp_tpl[tpl_token.len-1] != desc.data[desc.len-1]){
-											i_tpl++;
-											goto loop;
-										}
-									}
-									if(tmp_cmp_tpl >= cmp_tpl){//保证顺序
-										i_tpl++;
-										goto loop;
-									}
-									tmp_cmp_tpl = cmp_tpl;
-								}
-							}
-						}
-						return r_tpl;
-					}
+				r_tpl=pri_ngx_get_key_region(krc,&desc);
+				if(r_tpl < 0){
+					r_tpl=pri_ngx_get_key_tpl_region(krc,&desc);
+					if(r_tpl >= 0 ) break;
 				}
 			}
 		}else {
 			break;
 		}
 	}
-	if(node == NULL){
-		if(krc->count_key_template > 0 && i_tpl==0){
-			i_tpl++;
-			k=0;
-			goto find;
-		}else {
-			return default_region;
-		}
-		//
-	}
-	return  ((ngx_uint_t)node->data) % key_region_key; //region
+	if(r_tpl < 0 ) r_tpl = default_region;
+	return r_tpl;
     /*
     get_request_value(r,&val,&desc);
     if(desc.len == 0){
@@ -5281,7 +5305,7 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
 			memcpy( &peers_shm->ips , &opeers_shm->ips, sizeof(opeers_shm->ips));
 		}
 		//
-		if (opeers_shm->key_region[0].count > 0) {
+		if (opeers_shm->key_region[0].count > 0 || opeers_shm->key_region[0].count_key_template > 0) {
 			memcpy( &peers_shm->key_region , &opeers_shm->key_region , sizeof(opeers_shm->key_region));
 		}
 	}

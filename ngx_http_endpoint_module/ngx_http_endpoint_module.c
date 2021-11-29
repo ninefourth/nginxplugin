@@ -246,13 +246,13 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     			ngx_reload_router(router_name ,&f);
     			buf = append_printf(r->pool, &sucs);
         	}
-    	} else if( resource->nelts == 4 ){// /router/[name]/[add|get]/[variable]
+    	} else if( resource->nelts == 4 ){// /router/[name]/[add|exist|get]/[variable]
     		ngx_str_t *router_name = &value[1]; //router name
     		if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"add", 3) == 0){
     			ngx_str_t *v = &value[3];
     			ngx_set_router_variable(router_name,v);
     			buf = append_printf(r->pool, &sucs);
-    		} else if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"get", 3) == 0){
+    		} else if( value[2].len == 5 && ngx_strncasecmp(value[2].data, (u_char *)"exist", 5) == 0){
     			ngx_str_t *v = &value[3];
     			char rn[4];
     			rc = ngx_get_router_variable_region(router_name,v);
@@ -260,6 +260,14 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     			val_tmp.data = (u_char*)rn;
     			val_tmp.len = strlen(rn);
     			buf = append_printf(r->pool, &val_tmp);
+    		} else if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"get", 3) == 0){
+    			ngx_str_t *v = &value[3];
+				char rn[4];
+				rc = ngx_router_key_get_region(router_name,v);
+				sprintf(rn,"%ld",rc);
+				val_tmp.data = (u_char*)rn;
+				val_tmp.len = strlen(rn);
+				buf = append_printf(r->pool, &val_tmp);
     		}
     	}else if( resource->nelts == 5 ){// /router/[name]/add/[key]/[value]
     		ngx_str_t *router_name = &value[1]; //router name

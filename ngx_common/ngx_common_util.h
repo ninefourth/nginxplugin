@@ -15,8 +15,12 @@ struct ngx_binary_tree_node_s {
 	ngx_int_t     right;  //right node ,offset from root
 } ;
 ngx_binary_tree_node_t *ngx_init_binary_tree(ngx_binary_tree_node_t *root);
+ngx_uint_t *ngx_binary_tree_is_root(ngx_binary_tree_node_t *node);
+ngx_binary_tree_node_t *ngx_binary_tree_get_node(ngx_binary_tree_node_t *root , ngx_int_t offset);
 ngx_binary_tree_node_t *ngx_binary_tree_add_node(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *node ,ngx_binary_tree_node_compare cb);
 ngx_binary_tree_node_t *ngx_binary_tree_find(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *data ,ngx_binary_tree_node_compare cb);
+//ngx_binary_tree_node_t *ngx_binary_tree_remove_node(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *data ,ngx_binary_tree_node_compare cb);
+//ngx_binary_tree_node_t *ngx_binary_tree_add_tree(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *data ,ngx_binary_tree_node_compare cb);
 /* */
 
 /* link */
@@ -76,3 +80,6 @@ ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr);
 
 //math
 ngx_int_t ngx_math_log2(ngx_int_t x);
+
+//file
+void ngx_append_line_file(ngx_str_t *cnf_file , ngx_str_t *line );

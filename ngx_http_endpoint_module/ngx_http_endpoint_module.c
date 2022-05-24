@@ -243,14 +243,17 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
             ngx_http_get_param_value(r,arg_cf.data , arg_cf.len , &f);
         	if(f.len >0 ){
     			f.data = (u_char*)ngx_strcpy(r->pool,&f);
-    			ngx_reload_router(router_name ,&f);
+    			ngx_reload_router(r->pool,router_name ,&f);
     			buf = append_printf(r->pool, &sucs);
         	}
     	} else if( resource->nelts == 4 ){// /router/[name]/[add|exist|get]/[variable]
     		ngx_str_t *router_name = &value[1]; //router name
-    		if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"add", 3) == 0){
+    		if( value[2].len == 9 && ngx_strncasecmp(value[2].data, (u_char *)"variables", 9) == 0
+    			&& value[3].len == 4 && ngx_strncasecmp(value[3].data, (u_char *)"list", 4) == 0 ){// /router/[name]/variables/list
+    			buf = ngx_list_router_var(r->pool,router_name);
+    		} else if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"add", 3) == 0){
     			ngx_str_t *v = &value[3];
-    			ngx_set_router_variable(router_name,v);
+    			ngx_set_router_variable(r->pool ,router_name,v);
     			buf = append_printf(r->pool, &sucs);
     		} else if( value[2].len == 5 && ngx_strncasecmp(value[2].data, (u_char *)"exist", 5) == 0){
     			ngx_str_t *v = &value[3];
@@ -269,12 +272,23 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 				val_tmp.len = strlen(rn);
 				buf = append_printf(r->pool, &val_tmp);
     		}
-    	}else if( resource->nelts == 5 ){// /router/[name]/add/[key]/[value]
+    	}/*else if( resource->nelts == 5 ){// /router/[name]/index/remove/[key]
     		ngx_str_t *router_name = &value[1]; //router name
-    		if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"add", 3) == 0){
-    			ngx_str_t *k = &value[3];
-    			ngx_str_t *v = &value[4];
-    			ngx_add_router_item(r->pool ,router_name,k,ngx_atoi(v->data, v->len));
+    		if( value[3].len == 6 && ngx_strncasecmp(value[3].data, (u_char *)"remove", 6) == 0){
+    			ngx_str_t *idxt = &value[2]; //variable index
+    			ngx_uint_t idx = ngx_atoi(idxt->data, idxt->len);
+    			ngx_str_t *k = &value[4];
+    			ngx_add_router_item(r->pool ,router_name,idx,k);
+    			buf = append_printf(r->pool, &sucs);
+    		}
+    	}*/else if( resource->nelts == 6 ){// /router/[name]/index/add/[key]/[value]
+    		ngx_str_t *router_name = &value[1]; //router name
+    		if( value[3].len == 3 && ngx_strncasecmp(value[3].data, (u_char *)"add", 3) == 0){
+    			ngx_str_t *idxt = &value[2]; //variable index
+    			ngx_uint_t idx = ngx_atoi(idxt->data, idxt->len);
+    			ngx_str_t *k = &value[4];
+    			ngx_str_t *v = &value[5];
+    			ngx_add_router_item(r->pool ,router_name,idx,k,ngx_atoi(v->data, v->len));
     			buf = append_printf(r->pool, &sucs);
     		}
     	}

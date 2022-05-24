@@ -158,10 +158,14 @@ fzy.sm7.fxscm.net   1
 http://localhost:8100/region/[upstream]?conf=conf/include/region.cnf
 #重置访问路由规则
 http://localhost:8100/router/[name]?conf=conf/include/router.cnf
+#获取指定名称路由规则的所有变量名及索引号
+http://localhost:8100/router/[name]/variables/list
 #给指定路由规则添加项目,并会同步到相应的配置文件中
-http://localhost:8100/router/[name]/add/[key]/[value]
-#给指定路由规则更换路由规则变量
+http://localhost:8100/router/[name]/add/index/[key]/[value]
+#给指定路由规则添加路由规则变量
 http://localhost:8100/router/[name]/add/[variable]
-#得到指定路由规则，键对应的分区
+#得到指定路由规则，键对应的分区，key不与通配符记录做匹配
+http://localhost:8100/router/[name]/exist/[key]
+#得到指定路由规则，键对应的分区,key可以与通配符记录做匹配
 http://localhost:8100/router/[name]/get/[key]
 

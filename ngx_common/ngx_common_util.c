@@ -11,7 +11,7 @@ ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c)
 	while( i < len){
 		p2 = i;
 		if( s[i] == c ) {
-			if (p2 > p1+1 && sp == 0) sz++ ;
+			if ( ((p2 == 1 && p1 == 0) || p2 > p1+1) && sp == 0) sz++ ;
 			p1=p2;
 			sp=1;
 		}else if (s[i] != ' ' && s[i] != '\t') {
@@ -459,12 +459,37 @@ ngx_link_item_t *ngx_link_find_item(ngx_link_t *link ,ngx_link_item_t *data , ng
 	return NULL;
 }
 
+void ngx_append_line_file( ngx_str_t *cnf_file , ngx_str_t *line )
+{
+	ngx_fd_t          fd;
+
+	fd = ngx_open_file(cnf_file->data, NGX_FILE_APPEND, NGX_FILE_OPEN, NGX_FILE_DEFAULT_ACCESS);
+	if (fd != NGX_INVALID_FILE) {
+//		ngx_linefeed(line->data);
+		ngx_write_fd(fd, line->data ,line->len);
+		ngx_write_fd(fd, NGX_LINEFEED ,NGX_LINEFEED_SIZE);  //eol
+		if (ngx_close_file(fd) == NGX_FILE_ERROR) {
+			//
+		}
+	}
+}
+
 /** binary_tree **/
 ngx_binary_tree_node_t *ngx_init_binary_tree(ngx_binary_tree_node_t *root)
 {
 	root->data = NULL;
 	root->left = root->right = root->parent = 0;
 	return root;
+}
+/*
+ngx_uint_t ngx_binary_tree_is_root(ngx_binary_tree_node_t *node)
+{
+	return (node->parent == node->left) && (node->parent == node->right) ;
+}
+*/
+ngx_binary_tree_node_t *ngx_binary_tree_get_node(ngx_binary_tree_node_t *root , ngx_int_t offset)
+{
+	return ((ngx_binary_tree_node_t*)(root+offset));
 }
 
 ngx_binary_tree_node_t *pri_ngx_binary_tree_add_node(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *parent , ngx_binary_tree_node_t *node ,ngx_binary_tree_node_compare cb)
@@ -519,5 +544,61 @@ ngx_binary_tree_node_t *ngx_binary_tree_find(ngx_binary_tree_node_t *root , ngx_
 {
 	return pri_ngx_binary_tree_find(root ,root,data,cb);
 }
+/*
+ngx_binary_tree_node_t *ngx_binary_tree_remove_node(ngx_binary_tree_node_t *root , ngx_binary_tree_node_t *data ,ngx_binary_tree_node_compare cb)
+{
+	ngx_binary_tree_node_t *right_node,*left_node,*tmp_node,*t_node;
+	data = ngx_binary_tree_find(root,data,cb);
+	if(data != NULL) {
+		if( !ngx_binary_tree_is_root(data) ) {
+			t_node = ngx_binary_tree_get_node(root , data->parent) ;
+		}
+		if (ngx_binary_tree_is_root(data) || cb(t_node,data) > 0 ) { //remove left node,删除节点为左节点，删除节点的右子节点为替代节点。
+			// 替代节点：
+			// 1. 右子一添加到左子一的右叶子
+			// 2. 左子一变为右子一,此时替代节点左子一位置为空
+			// 3. 删除节点变为替代节点的左子一,此时删除节点右子位置为空
+			// 4. 将删除节点的左子节点位置替代删除节点
+			//
+			if (data->right != 0) { //
+				t_node = ngx_binary_tree_get_node(root,data->right);
+				if(t_node->right !=0 ){//右子一
+					right_node = (ngx_binary_tree_node_t*)(root+t_node->right);//右子一
+					if(t_node->left != 0) { //左子一
+						left_node = (ngx_binary_tree_node_t*)(root+t_node->left); //左子一
+						tmp_node = left_node;
+						while ( tmp_node->right != 0 ) {//左子一的右叶子
+							tmp_node = (ngx_binary_tree_node_t*)(root+tmp_node->right);
+						}
+						tmp_node->right = right_node - root ;// 1. 右子一添加到左子一的右叶子
+						right_node->parent = tmp_node - root ;
+					}
+				}
+				if( t_node->left !=0 ){// 2. 左子一变为右子一,此时替代节点左子一位置为空
+					left_node = (ngx_binary_tree_node_t*)(root+t_node->left); //左子一
+					t_node->right = left_node - root;
+					t_node->left = 0;
+				}
+				//3. 删除节点变为替代节点的左子一,之后删除节点右子位置为空
+				t_node->left = data - root;
+				t_node->parent = data->parent;
+				data->parent = t_node - root;
 
+			}
+			if (data->left != 0) { //4. 将删除节点的左子节点位置替代删除节点
+				t_node = ngx_binary_tree_get_node(root,data->left); //
+				if(!ngx_binary_tree_is_root(data)) {
+					tmp_node = ngx_binary_tree_get_node(root,data->parent);
+					tmp_node->left = data->left;
+				}
+				t_node->parent = data->parent;
+			}
+			data->parent = data->left = data->right = 0;
+		} else { //remove right node
+
+		}
+	}
+	return root;
+}
+*/
 /** **/

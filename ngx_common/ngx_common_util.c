@@ -1,9 +1,11 @@
 #include "ngx_common_util.h"
 
 static ngx_str_t http_head=ngx_string("http_");
-static ngx_str_t http_arg=ngx_string("arg_");
+static ngx_str_t http_param=ngx_string("arg_");
 static ngx_str_t http_uri=ngx_string("uri");
-static ngx_str_t http_body=ngx_string("body_");
+static ngx_str_t http_body_param=ngx_string("body_");
+static ngx_str_t http_body=ngx_string("body");
+static ngx_str_t http_arg=ngx_string("arg");
 
 ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c)
 {
@@ -27,6 +29,62 @@ ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c)
 	}
 	if(s[len] == c) sz--;*/
 	return sz;
+}
+
+ngx_int_t ngx_str_sch_last_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *left , ngx_str_t *right)
+{
+	u_char begin = 0, found=0;
+	u_char tmp_c;
+	//
+	if(c == '\t') {
+		c = ' ';
+	}
+	left->data = right->data = s;
+	left->len = len;
+	right->len = 0;
+	s+=len-1;
+	while( len > 0 ){
+		tmp_c = *s;
+		if(tmp_c == '\t') tmp_c=' ';
+		len--;
+		left->len--;
+		if(tmp_c ==' ' && begin == 0){
+			s--;
+			continue;
+		}else {
+			begin=1;
+		}
+		//
+		if(found == 0){
+			if(tmp_c == c){
+				right->data = s+sizeof(u_char);
+				found =1;
+				s--;
+				continue;
+			}
+			right->len++;
+		}
+
+		if(tmp_c != c && found == 1){
+			left->len++;
+			break;
+		}
+		s--;
+	}
+
+	return left->data != right->data;
+}
+
+ngx_int_t ngx_str_sch_idx_trimtoken(u_char *s , size_t len, u_char c , ngx_int_t idx, ngx_str_t *token)
+{
+	u_char *s_t;
+	while(idx-- >= 0){
+		s_t = ngx_str_sch_next_trimtoken(s,len,c,token);
+		if(token->len == 0) return NGX_FALSE;
+		len = len - (s_t - s);
+		s = s_t;
+	}
+	return NGX_TRUE;
 }
 
 u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *token)
@@ -322,9 +380,12 @@ ngx_str_t *ngx_http_get_post_param(ngx_http_request_t *r, u_char *name , size_t 
 {
 	ngx_str_t args;
 
-	if(r->header_in){
-		args.data = r->header_in->pos;
-		args.len = r->header_in->last - r->header_in->pos;
+//	if(r->header_in){
+	if(r->request_body && r->request_body->bufs && r->request_body->bufs->buf) {
+		args.data = r->request_body->bufs->buf->pos;
+		args.len = r->request_body->bufs->buf->last - r->request_body->bufs->buf->pos;
+//		args.data = r->header_in->pos;
+//		args.len = r->header_in->last - r->header_in->pos;
 		ngx_get_param_value(&args,name,len,value);
 		return value;
 	}
@@ -347,18 +408,28 @@ ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t 
 			desc->data = sh->data;
 			desc->len = sh->len;
 		}
-	} else if (var->len >= http_arg.len && ngx_str_startwith( var->data, http_arg.data, http_arg.len) ) {//$arg_
-		var->data = var->data+http_arg.len;
-		var->len = var->len - http_arg.len;
+	} else if (var->len >= http_param.len && ngx_str_startwith( var->data, http_param.data, http_param.len) ) {//$arg_
+		var->data = var->data+http_param.len;
+		var->len = var->len - http_param.len;
 		ngx_http_get_param_value(r,var->data,var->len, desc);
 	} else if ( !ngx_strncmp(var->data, http_uri.data, http_uri.len) ){//uri
 		desc->data = r->uri.data;
 		desc->len = r->uri.len;
-	} else if (var->len >= http_body.len && ngx_str_startwith( var->data, http_body.data, http_body.len) ) {//post body
-		var->data = var->data + http_body.len;
-		var->len = var->len - http_body.len;
+	} else if ( !ngx_strncmp(var->data, http_arg.data, http_arg.len) ){//arg
+		desc->data = r->args.data;
+		desc->len = r->args.len;
+	} else if (var->len >= http_body_param.len && ngx_str_startwith( var->data, http_body_param.data, http_body_param.len) ) {//post body parameter
+		var->data = var->data + http_body_param.len;
+		var->len = var->len - http_body_param.len;
 		desc->len=0;
 		ngx_http_get_post_param(r,var->data,var->len, desc);
+	} else if (var->len >= http_body.len && ngx_str_startwith( var->data, http_body.data, http_body.len) ) {//body
+		if(r->request_body && r->request_body->bufs && r->request_body->bufs->buf) {
+			desc->data = r->request_body->bufs->buf->pos;
+			desc->len = r->request_body->bufs->buf->last - r->request_body->bufs->buf->pos;
+		} else {
+			desc->len = 0;
+		}
 	} else {
 		vl = ngx_http_get_variable_req(r , var);
 		if(vl){
@@ -393,6 +464,15 @@ ngx_int_t ngx_math_log2(ngx_int_t x)
     exp = (ix >> 23) & 0xff;//the bits of exponent
 
     return exp - 126;
+}
+
+ngx_uint_t ngx_math_pow(ngx_uint_t x , ngx_uint_t y)
+{
+	if(y == 0) x = 1;
+	while(y-- > 1){
+		x *= x;
+	}
+	return x;
 }
 
 size_t ngx_num_bit_count(ngx_int_t num)

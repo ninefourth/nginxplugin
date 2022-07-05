@@ -1211,13 +1211,14 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
 {
 	ngx_fd_t          fd;
 	size_t            size;
-	u_char            *s_t, *buf ,*hdbuf;//,key_tpl ;
+//	u_char            *s_t,
+	u_char			*buf ,*hdbuf ,fg=0;//,key_tpl ;
 	//ngx_int_t			p1,p2,p;
 	ssize_t           n;
 	ngx_file_info_t   fi;
 	//
 	ngx_uint_t sz = 0, keyregion;
-	ngx_str_t s_token ;
+	ngx_str_t s_token ,r_token ;
 	key_region_confs_t  *krcf = NULL;
 	ngx_binary_tree_node_t   *krg, *root;
 	u_char			*wck;
@@ -1259,8 +1260,24 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                                 	}
                                 	cpy_chars(krcfdt->variable ,buf+1,sz-2);
 									krcf->count_variables++ ;
+									fg = ngx_str_index_of(buf+1,sz-2,'&',0) >= 0; //more variables 'and'
                                 } else {
                                 	if (*buf != '#'){
+                                		if(ngx_str_sch_last_trimtoken(buf ,sz ,' ',&s_token,&r_token)) {
+                                			if(fg || ngx_str_index_of(s_token.data,s_token.len,'*',0) >= 0){//wildchar
+												wck = (u_char*)krcfdt->key_template[krcfdt->count_key_template++];
+												cpy_chars(wck+sizeof(u_char),s_token.data,s_token.len);
+												wck[0] = (u_char)ngx_atoi(r_token.data, r_token.len);
+											} else {
+												keyregion = ngx_str_2_hash(&s_token);
+												keyregion = keyregion * key_region_key +ngx_atoi(r_token.data, r_token.len);
+												ngx_init_binary_tree(krg);
+												krg->data = (void*)keyregion;
+												ngx_binary_tree_add_node(root, krg,node_compare);
+												krg++;
+												krcf->variables[krcf->count_variables-1].count++;
+											}
+                                		/*}
                                 		s_t = ngx_str_sch_next_trimtoken(buf ,sz ,' ',&s_token);
 										if(s_token.len > 0 && s_token.len < sz && s_t) {
 											if( ngx_str_index_of(s_token.data,s_token.len,'*',0) >= 0){//wildchar
@@ -1283,7 +1300,7 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
 													krg++;
 //													krcf->count++;
 													krcf->variables[krcf->count_variables-1].count++;
-											}
+											}*/
 										} else {
 											goto tail;
 										}
@@ -1569,25 +1586,25 @@ void ngx_set_router_variable(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_str_
 	}
 }
 
-ngx_int_t pri_ngx_get_key_region(key_region_confs_t *krc , ngx_str_t *var)
+ngx_int_t pri_ngx_get_key_region(key_region_confs_detail_t *krc_dt , ngx_str_t *var)
 {
 	ngx_int_t   ret = -1;
 	ngx_binary_tree_node_t  *node,node_data;
-	size_t	i;
 	node_data.data = (void*)( ngx_str_2_hash(var)*key_region_key);
 //	node = ngx_binary_tree_find(krc->key_regions, &node_data,node_compare);
 	node = NULL;
-	for( i = 0; i < krc->count_variables ; i++){
+	/*for( i = 0; i < krc->count_variables ; i++){
 		node = ngx_binary_tree_find(krc->variables[i].key_regions, &node_data,node_compare);
 		if (node) break;
-	}
+	}*/
+	node = ngx_binary_tree_find(krc_dt->key_regions, &node_data,node_compare);
 	if(node){
 		ret = ((ngx_uint_t)node->data) % key_region_key; //region
 	}
 	return ret;
 }
 
-ngx_int_t pri_ngx_get_key_tpl_region(key_region_confs_t *krc , ngx_str_t *desc)
+ngx_int_t pri_ngx_get_key_tpl_index(key_region_confs_t *krc , ngx_str_t *desc)
 {
 	size_t	i_tpl = 0 , k_tpl=0 , sz_tpl,r_tpl, h_tpl =0 , t_tpl=0 , i ;
 	u_char	*tpl,*s_tpl,*cmp_tpl,*tmp_cmp_tpl =0;
@@ -1641,17 +1658,149 @@ ngx_int_t pri_ngx_get_key_tpl_region(key_region_confs_t *krc , ngx_str_t *desc)
 	return ret;
 }
 
+/*
+ * 变量是&的组合中，krc_dt中的key_template可以看作是个二维表,如：
+ * [http_host&arg_a]
+ * 127.0.0.1	ab	1
+ * localhost	abc	2
+ * idx_scope是查找的索引范围(二进制占位法)，col_idx是组合key的索引就是要对比的位置
+ * 本方法是从二维表中查找idx_scope索引行范围内匹配desc的所有行索引并返回
+ * */
+ngx_uint_t pri_ngx_get_key_tpl_pos(key_region_confs_detail_t *krc_dt , ngx_str_t *desc, ngx_int_t idx_scope, ngx_uint_t col_idx)
+{
+	size_t	i_tpl = 0 , k_tpl , sz_tpl, h_tpl , t_tpl  ;
+	u_char	*tpl,*s_tpl,*cmp_tpl,*tmp_cmp_tpl;
+	ngx_int_t p;
+	ngx_str_t tpl_token, tpl_sp_token;
+
+	if( idx_scope < 0 && krc_dt->count_key_template > 0) {//全部索引
+		idx_scope = ngx_math_pow(2,krc_dt->count_key_template) - 1;
+	}
+loop:
+	for( ;i_tpl < krc_dt->count_key_template ;i_tpl++){
+		k_tpl = 0; h_tpl = 0; t_tpl = 0; tmp_cmp_tpl =0;
+		p = 1 << i_tpl;
+		if( (p | idx_scope) != idx_scope ) continue;
+		idx_scope -= p;
+		tpl = (u_char*)krc_dt->key_template[i_tpl];
+		tpl = tpl +sizeof(u_char);//第一位是区号,不需要
+		if (ngx_str_sch_idx_trimtoken(tpl,strlen((char*)tpl),' ',col_idx,&tpl_sp_token) == NGX_FALSE) return NGX_FALSE;
+		sz_tpl = ngx_str_find_element_count(tpl_sp_token.data, tpl_sp_token.len ,'*');
+		if(sz_tpl <= 0) {
+			if (tpl_sp_token.len == desc->len && ngx_strncasecmp(desc->data, tpl_sp_token.data, desc->len) == 0 ) {//匹配
+				idx_scope += p;//记录索引
+			}
+			continue;
+		}
+		//通配符匹配
+		if(tpl_sp_token.data[0] != '*') h_tpl=1;//键不是以*开始，即是要求对比必须是从0位置就开始相等
+		if(tpl_sp_token.data[tpl_sp_token.len-1] != '*') t_tpl=1;//键不是以*结尾，即是要求结尾部分相等
+		while( k_tpl++ < sz_tpl){
+			s_tpl = ngx_str_sch_next_trimtoken(tpl_sp_token.data ,tpl_sp_token.len ,'*',&tpl_token);
+			if(tpl_token.len > 0){
+				tpl_sp_token.len = tpl_sp_token.len - (s_tpl - tpl_sp_token.data);
+				tpl_sp_token.data = s_tpl;
+				cmp_tpl = ngx_strstrn(desc->data,(char*)tpl_token.data,tpl_token.len-1);
+				if( cmp_tpl == NULL ){//不匹配
+					i_tpl++;
+					goto loop;
+				}else {
+					if(k_tpl == 1 && h_tpl == 1){
+						if(cmp_tpl != desc->data){//首次且从0位置开始对比无匹配
+							i_tpl++;
+							goto loop;
+						}
+					}
+					if(k_tpl == sz_tpl && t_tpl == 1){
+						if(cmp_tpl[tpl_token.len-1] != desc->data[desc->len-1]){//最后一次且尾部对比无匹配
+							i_tpl++;
+							goto loop;
+						}
+					}
+					if(tmp_cmp_tpl >= cmp_tpl){//保证顺序
+						i_tpl++;
+						goto loop;
+					}
+					tmp_cmp_tpl = cmp_tpl;
+				}
+			}
+		}
+		idx_scope += p;//记录索引
+	}
+	return idx_scope;
+}
+
+ngx_int_t pri_ngx_get_key_tpl_region(key_region_confs_detail_t *krc_dt , ngx_str_t *desc)
+{
+	size_t	i_tpl = 0 , k_tpl=0 , sz_tpl,r_tpl, h_tpl =0 , t_tpl=0 ,tpl_len = 0 ;
+	u_char	*tpl,*s_tpl,*cmp_tpl,*tmp_cmp_tpl =0;
+	ngx_int_t ret = -1;
+	ngx_str_t tpl_token;
+
+//	for (i = 0; i < krc->count_variables && ret == -1 ; i++) {
+//		i_tpl = 0 ;
+	loop:
+		for( ;i_tpl < krc_dt->count_key_template ;i_tpl++){
+			k_tpl = 0; h_tpl = 0; t_tpl = 0;
+			tpl = (u_char*)krc_dt->key_template[i_tpl];
+			r_tpl = (size_t)tpl[0];
+			tpl = tpl +sizeof(u_char);
+			sz_tpl = ngx_str_find_element_count(tpl, strlen((char*)tpl) ,'*');
+			if(tpl[0] != '*') h_tpl=1;//键不是以*开始，即是要求对比必须是从0位置就开始相等
+			tpl_len=strlen((char*)tpl);
+			if(tpl[tpl_len-1] != '*') t_tpl=1;//键不是以*结尾，即是要求结尾部分相等
+			while( k_tpl++ < sz_tpl){
+				s_tpl = ngx_str_sch_next_trimtoken(tpl , tpl_len,'*',&tpl_token);
+				if(tpl_token.len > 0){
+					tpl_len = tpl_len - (s_tpl - tpl);
+					tpl = s_tpl;
+					cmp_tpl = ngx_strstrn(desc->data,(char*)tpl_token.data,tpl_token.len-1);
+					if( cmp_tpl == NULL ){
+						i_tpl++;
+						goto loop;
+					}else {
+						if(k_tpl == 1 && h_tpl == 1){
+							if(cmp_tpl != desc->data){
+								i_tpl++;
+								goto loop;
+							}
+						}
+						if(k_tpl == sz_tpl && t_tpl == 1){
+							if(cmp_tpl[tpl_token.len-1] != desc->data[desc->len-1]){
+								i_tpl++;
+								goto loop;
+							}
+						}
+						if(tmp_cmp_tpl >= cmp_tpl){//保证顺序
+							i_tpl++;
+							goto loop;
+						}
+						tmp_cmp_tpl = cmp_tpl;
+					}
+				}
+			}
+			ret = r_tpl;
+		}
+//	}
+	return ret;
+}
+
 ngx_int_t ngx_get_router_variable_region(ngx_str_t *router_name , ngx_str_t *var)
 {
 	ngx_int_t   ret = -1;
 	if(loc_cnfs.count >0) {
 		ngx_uint_t i;
 		key_region_confs_t *krc;
+		key_region_confs_detail_t *krc_dt;
 		for(i=0;i<loc_cnfs.count;i++){
 			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
 					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
 				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
-				return pri_ngx_get_key_region(krc,var);
+				for( i = 0; i < krc->count_variables ; i++){
+					krc_dt = &krc->variables[i];
+					ret = pri_ngx_get_key_region(krc_dt,var);
+					if( ret >= 0 ) return ret;
+				}
 			}
 		}
 	}
@@ -4015,10 +4164,12 @@ key_region_confs_t *ngx_http_upstream_get_shm_key_region(ngx_http_upstream_check
 	return uclcf->shm_key_region_confs;
 }
 
-ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc)
+ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc,ngx_str_t *val)
 {
 	ngx_int_t ret = -1;
+	size_t i;
 	key_region_confs_t *krc = NULL;
+	key_region_confs_detail_t *krc_dt;
 
 	if(loc_cnfs.count >0) {
 		ngx_uint_t i;
@@ -4031,9 +4182,25 @@ ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc)
 	}
 
 	if(krc !=NULL){
-		ret=pri_ngx_get_key_region(krc,desc);
+		for( i = 0; i < krc->count_variables ; i++){
+			krc_dt = &krc->variables[i];
+			ret = pri_ngx_get_key_region(krc_dt,desc);
+			if( ret >= 0 ){
+				val->data = krc_dt->variable;
+				val->len = strlen((char*)krc_dt->variable);
+				break;
+			}
+		}
 		if(ret < 0){
-			ret=pri_ngx_get_key_tpl_region(krc,desc);
+			for( i = 0; i < krc->count_variables ; i++){
+				krc_dt = &krc->variables[i];
+				ret = pri_ngx_get_key_tpl_region(krc_dt,desc);
+				if( ret >= 0 ) {
+					val->data = krc_dt->variable;
+					val->len = strlen((char*)krc_dt->variable);
+					break;
+				}
+			}
 		}
 	}
 
@@ -4043,19 +4210,34 @@ ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc)
 ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region_confs_t *krc,ngx_uint_t fg)
 {
 	ngx_str_t val,desc ,s_token,tpl_token;
-	ngx_uint_t  k=0,sz,split_sz;
+	ngx_uint_t  k,sz,split_sz;
 	u_char *s_t, split_c, *tpl, *s_tpl;
-	ngx_int_t	r_tpl = default_region ;
+	ngx_int_t	r_tpl = default_region;
+	ngx_int_t idx_scope,idx,idx_scope_tmp,idx_scope_tmp_t;
 	size_t i,tpl_sz;
+	u_char split;
+	key_region_confs_detail_t *krc_dt;
+
 	//
-	for (i = 0;i < krc->count_variables ; i++) {
-		val.data=krc->variables[i].variable;
+	i = 0;
+	loop:
+	for ( ;i < krc->count_variables ; i++) {
+		split='|';
+		krc_dt = &krc->variables[i];
+		val.data=krc_dt->variable;
+		idx_scope = -1;
+		idx = -1;
 		val.len=strlen((char*)val.data);
 		k = 0;
 		//
-		sz = ngx_str_find_element_count(val.data , val.len ,'|');
+		if(ngx_str_index_of(val.data , val.len ,'&',0) >= 0){//如果是多变量与的关系
+			if(fg == 1) continue;
+			split='&';
+		}
+		sz = ngx_str_find_element_count(val.data , val.len ,split);
 		while( k++ < sz){
-			s_t = ngx_str_sch_next_trimtoken(val.data ,val.len ,'|',&s_token);
+			idx++;
+			s_t = ngx_str_sch_next_trimtoken(val.data ,val.len ,split,&s_token);
 			if(s_token.len > 0){
 				val.len = val.len - (s_t - val.data) ;
 				val.data = s_t;
@@ -4074,9 +4256,17 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 						split_sz = ngx_str_find_element_count(desc.data , desc.len ,split_c);
 						tpl = desc.data;
 						tpl_sz = desc.len;
+						idx_scope_tmp_t = 0;
 						while(split_sz-- > 0) {
 							s_tpl = ngx_str_sch_next_trimtoken(tpl ,tpl_sz ,split_c, &tpl_token);
-							r_tpl = (fg == 0)? pri_ngx_get_key_region(krc,&tpl_token) : pri_ngx_get_key_tpl_region(krc,&tpl_token);
+							if(split == '&'){//如果是多变量与的关系,找到所有匹配的索引
+								idx_scope_tmp = pri_ngx_get_key_tpl_pos(krc_dt,&tpl_token,idx_scope,idx);
+								idx_scope_tmp_t |= idx_scope_tmp;//split_模式的token是或的关系做匹配
+								tpl_sz -= s_tpl - tpl;
+								tpl = s_tpl;
+								continue;
+							}
+							r_tpl = (fg == 0)? pri_ngx_get_key_region(krc_dt,&tpl_token) : pri_ngx_get_key_tpl_region(krc_dt,&tpl_token);
 							if(r_tpl < 0){
 								tpl_sz -= s_tpl - tpl;
 								tpl = s_tpl;
@@ -4084,17 +4274,44 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 							}
 							goto tail;
 						}
+						if(split == '&'){
+							idx_scope = idx_scope_tmp_t;
+							if(idx_scope <= 0) goto tail;
+						}
 					} else {
-						r_tpl = (fg == 0)? pri_ngx_get_key_region(krc,&desc) : pri_ngx_get_key_tpl_region(krc,&desc);
+						if(split == '&'){//如果是多变量与的关系,找到所有匹配的索引
+							idx_scope = pri_ngx_get_key_tpl_pos(krc_dt,&desc,idx_scope,idx);
+							if(idx_scope <= 0) {
+								i++;
+								goto loop;
+							}
+							continue;
+						}
+						r_tpl = (fg == 0)? pri_ngx_get_key_region(krc_dt,&desc) : pri_ngx_get_key_tpl_region(krc_dt,&desc);
 						if( r_tpl < 0 ){
 							continue;
 						}
 						goto tail;
 					}
+				} else {
+					if(split == '&'){
+						i++;
+						goto loop;
+					}
 				}
 			}else {
 				break;
 			}
+		}
+		if(split == '&' && idx_scope > 0){//如果是多变量与的关系
+			idx_scope_tmp = idx_scope;
+			i = 0;
+			while( idx_scope == idx_scope_tmp ) {//得到匹配的索引范围中第一个索引
+				i++;
+				idx_scope_tmp = idx_scope_tmp >> i << i;
+			}
+			r_tpl = (size_t)krc_dt->key_template[i-1][0];
+			goto tail;
 		}
 	}
 	tail:

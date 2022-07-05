@@ -127,6 +127,28 @@ append_printf(ngx_pool_t* pool, ngx_str_t *s)
     return buf;
 }
 
+ngx_buf_t *
+more_append_printf(ngx_pool_t* pool, size_t size, ...)
+{
+	ngx_buf_t                  *buf = NULL;
+	ngx_str_t *var;
+	buf = ngx_create_temp_buf(pool, size);
+
+    if (buf != NULL) {
+		va_list   args;
+		va_start(args, size);
+		while(size > 0) {
+			var = va_arg( args , ngx_str_t* );
+			buf->last = ngx_sprintf(buf->last, "%V", var);
+			size -= var->len ;
+		}
+		va_end(args);
+		buf->last = ngx_sprintf(buf->last, "\n");
+	}
+
+    return buf;
+}
+
 static ngx_int_t
 ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 {
@@ -135,7 +157,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     ngx_chain_t                out;
     ngx_str_t                  *con;
     ngx_str_t                  *value,val_tmp;
-    ngx_str_t                  arg_cf=ngx_string("conf") , ip = ngx_string("ip");
+    ngx_str_t                  arg_cf=ngx_string("conf") , ip = ngx_string("ip"), tab = ngx_string("\t");
 	u_char 					*s_t;
 
     rc = ngx_http_discard_request_body(r);
@@ -265,12 +287,14 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     			buf = append_printf(r->pool, &val_tmp);
     		} else if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"get", 3) == 0){
     			ngx_str_t *v = &value[3];
+    			ngx_str_t v_tmp;
+    			v_tmp.len = 0;
 				char rn[4];
-				rc = ngx_router_key_get_region(router_name,v);
+				rc = ngx_router_key_get_region(router_name,v,&v_tmp);
 				sprintf(rn,"%ld",rc);
 				val_tmp.data = (u_char*)rn;
 				val_tmp.len = strlen(rn);
-				buf = append_printf(r->pool, &val_tmp);
+				buf = more_append_printf(r->pool, val_tmp.len+tab.len+v_tmp.len, &val_tmp,&tab,&v_tmp);
     		}
     	}/*else if( resource->nelts == 5 ){// /router/[name]/index/remove/[key]
     		ngx_str_t *router_name = &value[1]; //router name

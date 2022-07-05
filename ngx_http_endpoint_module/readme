@@ -80,9 +80,16 @@ aa
 # - 匹配get地址中的参数a的值
 [arg_a]
 ab
+# - 匹配地址uri后的参数
+[arg]
+abc
 # - post请求体里取a的值
 [body_a]
 aa
+# - post请求体的内容
+[body]
+{"a":"abcde"}
+
 #"{}"内部的配置是与的关系
 {
 [host]
@@ -153,6 +160,10 @@ router [name] conf/include/router.conf;
 www.fxscm.net   0
 zzjdl.fxscm.net 0
 fzy.sm7.fxscm.net   1
+
+#多变量联合(以"&"分隔)，下面取值(空格分隔)与变量位置一一对应，最后是所属区
+[http_host&http_fxdn&arg_fxdn]
+*.s1.fxscm.*    www.fxscm.net   zzjdl.fxscm.net 2
 
 #重置upstream分区
 http://localhost:8100/region/[upstream]?conf=conf/include/region.cnf

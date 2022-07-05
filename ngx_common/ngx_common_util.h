@@ -59,6 +59,8 @@ ngx_uint_t read_line(u_char *buf);
 ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len);
 ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c);
 u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *token);
+ngx_int_t ngx_str_sch_idx_trimtoken(u_char *s , size_t len, u_char c , ngx_int_t idx, ngx_str_t *token);
+ngx_int_t ngx_str_sch_last_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *left , ngx_str_t *right);
 size_t ngx_num_bit_count(ngx_int_t num);
 ngx_int_t ngx_str_index_of(u_char *s , size_t len, u_char c ,ngx_uint_t begin);
 ngx_int_t ngx_str_to_int(u_char *line, size_t n);
@@ -80,6 +82,7 @@ ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr);
 
 //math
 ngx_int_t ngx_math_log2(ngx_int_t x);
+ngx_uint_t ngx_math_pow(ngx_uint_t x , ngx_uint_t y);
 
 //file
 void ngx_append_line_file(ngx_str_t *cnf_file , ngx_str_t *line );

@@ -42,6 +42,9 @@ http://192.168.7.233:8100/down/store1/0/log
 #挂载server /up/{upstream_name}/{server_name}
 http://192.168.7.233:8100/up/store1/0
 
+#要求{upstream_name}/{server_name}不被做有效性检查
+http://192.168.7.233:8100/nocheck/store1/0
+
 如果要摘挂多个服务器可以用","分隔
 
 三.动态设置服务器负载权重
@@ -164,6 +167,10 @@ fzy.sm7.fxscm.net   1
 #多变量联合(以"&"分隔)，下面取值(空格分隔)与变量位置一一对应，最后是所属区
 [http_host&http_fxdn&arg_fxdn]
 *.s1.fxscm.*    www.fxscm.net   zzjdl.fxscm.net 2
+
+#变量取值保留状态(以$做标识做为保持状态的变量,必须放最末)，如下：uri地址中包含shopedi访问分区2，记下同时的cookie_session变量的值，以后所有同cookie_session的访问均分到分区2
+[split_/_uri$cookie_session]
+shopedi 2
 
 #重置upstream分区
 http://localhost:8100/region/[upstream]?conf=conf/include/region.cnf

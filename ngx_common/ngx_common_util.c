@@ -258,7 +258,8 @@ ngx_str_to_int(u_char *line, size_t n)
 }
 
 char*
-ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str){
+ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str)
+{
     char *s;
     s=ngx_palloc(pool,str->len+1);
     ngx_memcpy(s,str->data,str->len);
@@ -268,10 +269,18 @@ ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str){
 }
 
 u_char*
-ngx_strcat(u_char* des , u_char* src , size_t len) {
+ngx_strcat(u_char* des , u_char* src , size_t len)
+{
     ngx_memcpy(des, src, len);
     des += len;
     return des;
+}
+
+ngx_int_t ngx_str_cmp(ngx_str_t *v1 ,ngx_str_t *v2)
+{
+	ngx_int_t ret;
+	ret = ngx_strncmp( v1->data, v2->data, ngx_min(v1->len,v2->len) );
+	return (ret == 0) ? (ngx_int_t)v1->len - (ngx_int_t)v2->len : ret ;
 }
 
 
@@ -375,6 +384,12 @@ ngx_http_variable_value_t *ngx_http_get_variable_req(ngx_http_request_t *r, ngx_
     return NULL;
 }
 
+ngx_http_variable_value_t *ngx_http_get_variable_req_inner(ngx_http_request_t *r, ngx_str_t *name)
+{
+	if(name == NULL || name->len == 0 || r == NULL) return NULL;
+	ngx_uint_t key = ngx_hash_strlow(name->data, name->data, name->len);
+	return ngx_http_get_variable(r, name, key);
+}
 
 ngx_str_t *ngx_http_get_post_param(ngx_http_request_t *r, u_char *name , size_t len ,ngx_str_t *value)
 {
@@ -402,40 +417,46 @@ ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t 
 	ivar = var->data;
 	isz = var->len ;
 	desc->len=0;
-	if (var->len >= http_head.len && ngx_str_startwith( var->data, http_head.data, http_head.len) ) {//$http_
-		sh = ngx_http_get_variable_head(r,var->data+http_head.len , var->len - http_head.len);
-		if(sh){
-			desc->data = sh->data;
-			desc->len = sh->len;
-		}
-	} else if (var->len >= http_param.len && ngx_str_startwith( var->data, http_param.data, http_param.len) ) {//$arg_
-		var->data = var->data+http_param.len;
-		var->len = var->len - http_param.len;
-		ngx_http_get_param_value(r,var->data,var->len, desc);
-	} else if ( !ngx_strncmp(var->data, http_uri.data, http_uri.len) ){//uri
-		desc->data = r->uri.data;
-		desc->len = r->uri.len;
-	} else if ( !ngx_strncmp(var->data, http_arg.data, http_arg.len) ){//arg
-		desc->data = r->args.data;
-		desc->len = r->args.len;
-	} else if (var->len >= http_body_param.len && ngx_str_startwith( var->data, http_body_param.data, http_body_param.len) ) {//post body parameter
-		var->data = var->data + http_body_param.len;
-		var->len = var->len - http_body_param.len;
-		desc->len=0;
-		ngx_http_get_post_param(r,var->data,var->len, desc);
-	} else if (var->len >= http_body.len && ngx_str_startwith( var->data, http_body.data, http_body.len) ) {//body
-		if(r->request_body && r->request_body->bufs && r->request_body->bufs->buf) {
-			desc->data = r->request_body->bufs->buf->pos;
-			desc->len = r->request_body->bufs->buf->last - r->request_body->bufs->buf->pos;
+	vl = ngx_http_get_variable_req_inner(r,var);
+	if(vl == NULL || vl->not_found == 1){
+		if (var->len >= http_head.len && ngx_str_startwith( var->data, http_head.data, http_head.len) ) {//$http_
+			sh = ngx_http_get_variable_head(r,var->data+http_head.len , var->len - http_head.len);
+			if(sh){
+				desc->data = sh->data;
+				desc->len = sh->len;
+			}
+		} else if (var->len >= http_param.len && ngx_str_startwith( var->data, http_param.data, http_param.len) ) {//$arg_
+			var->data = var->data+http_param.len;
+			var->len = var->len - http_param.len;
+			ngx_http_get_param_value(r,var->data,var->len, desc);
+		} else if ( !ngx_strncmp(var->data, http_uri.data, http_uri.len) ){//uri
+			desc->data = r->uri.data;
+			desc->len = r->uri.len;
+		} else if ( !ngx_strncmp(var->data, http_arg.data, http_arg.len) ){//arg
+			desc->data = r->args.data;
+			desc->len = r->args.len;
+		} else if (var->len >= http_body_param.len && ngx_str_startwith( var->data, http_body_param.data, http_body_param.len) ) {//post body parameter
+			var->data = var->data + http_body_param.len;
+			var->len = var->len - http_body_param.len;
+			desc->len=0;
+			ngx_http_get_post_param(r,var->data,var->len, desc);
+		} else if (var->len >= http_body.len && ngx_str_startwith( var->data, http_body.data, http_body.len) ) {//body
+			if(r->request_body && r->request_body->bufs && r->request_body->bufs->buf) {
+				desc->data = r->request_body->bufs->buf->pos;
+				desc->len = r->request_body->bufs->buf->last - r->request_body->bufs->buf->pos;
+			} else {
+				desc->len = 0;
+			}
 		} else {
-			desc->len = 0;
+			vl = ngx_http_get_variable_req(r , var);
+			if(vl && vl->not_found == 0){
+				desc->data = vl->data;
+				desc->len = vl->len;
+			}
 		}
 	} else {
-		vl = ngx_http_get_variable_req(r , var);
-		if(vl){
-			desc->data = vl->data;
-			desc->len = vl->len;
-		}
+		desc->data = vl->data;
+		desc->len = vl->len;
 	}
 	var->data = ivar;
 	var->len = isz;

@@ -64,6 +64,7 @@ ngx_int_t ngx_str_sch_last_trimtoken(u_char *s , size_t len, u_char c , ngx_str_
 size_t ngx_num_bit_count(ngx_int_t num);
 ngx_int_t ngx_str_index_of(u_char *s , size_t len, u_char c ,ngx_uint_t begin);
 ngx_int_t ngx_str_to_int(u_char *line, size_t n);
+ngx_int_t ngx_str_cmp(ngx_str_t *v1 ,ngx_str_t *v2);
 
 /*http request function*/
 //get http url parameter

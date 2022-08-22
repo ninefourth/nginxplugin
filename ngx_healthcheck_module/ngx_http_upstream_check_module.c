@@ -149,7 +149,7 @@ typedef struct {
     ngx_atomic_t                             down;
 
     u_char                                   padding[64];
-    //by zgk , force the server down, it is invalid for check , if ==1 only forcedown , if ==2 forcedown and output error log
+    //by zgk , force the server down, it is invalid for check , if ==1 only forcedown , if ==2 forcedown and output error log, if ==3 forceup and force not check
     ngx_atomic_t                             force_down;
     //by zgk , the weight of server
     ngx_atomic_t                             weight;
@@ -1918,32 +1918,6 @@ static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_
 			split_c = 0;
 		}
 		get_request_value(r,&s,&s_tmp);
-		/*s_tmp.len=0;
-		if (s.len >= http_head.len && ngx_str_startwith( s.data, http_head.data, http_head.len) ) {//$http_
-			sh = ngx_http_get_variable_head(r,s.data+http_head.len , s.len - http_head.len);
-			if(sh){
-				s_tmp.data = sh->data;
-				s_tmp.len = sh->len;
-			}
-		} else if (s.len >= http_arg.len && ngx_str_startwith( s.data, http_arg.data, http_arg.len) ) {//$arg_
-			s.data = s.data+http_arg.len;
-			s.len = s.len - http_arg.len;
-			ngx_http_get_param_value(r,s.data,s.len, &s_tmp);
-		} else if ( !ngx_strncmp(s.data, http_uri.data, http_uri.len) ){//uri
-			s_tmp.data = r->uri.data;
-			s_tmp.len = r->uri.len;
-		} else if (s.len >= http_body.len && ngx_str_startwith( s.data, http_body.data, http_body.len) ) {//post body
-			s.data = s.data + http_body.len;
-			s.len = s.len - http_body.len;
-			s_tmp.len=0;
-			ngx_http_get_post_param(r,s.data,s.len, &s_tmp);
-		} else {
-			vl = ngx_http_get_variable_req(r , &s);
-			if(vl){
-				s_tmp.data = vl->data;
-				s_tmp.len = vl->len;
-			}
-		}*/
 
 		if(s_tmp.len > 0){
 			if (split_c){
@@ -4207,19 +4181,20 @@ ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc,ng
 	return ret;
 }
 
-ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region_confs_t *krc,ngx_uint_t fg)
+ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region_confs_t *krc)
 {
-	ngx_str_t val,desc ,s_token,tpl_token;
-	ngx_uint_t  k,sz,split_sz;
+	ngx_str_t val,desc ,s_token,tpl_token, trace_val;
+	ngx_uint_t  k,split_sz;
 	u_char *s_t, split_c, *tpl, *s_tpl;
 	ngx_int_t	r_tpl = default_region;
-	ngx_int_t idx_scope,idx,idx_scope_tmp,idx_scope_tmp_t;
+	ngx_int_t idx_scope,idx,idx_scope_tmp,idx_scope_tmp_t,sz;
 	size_t i,tpl_sz;
 	u_char split;
 	key_region_confs_detail_t *krc_dt;
 
 	//
 	i = 0;
+	trace_val.len = 0;
 	loop:
 	for ( ;i < krc->count_variables ; i++) {
 		split='|';
@@ -4228,14 +4203,24 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 		idx_scope = -1;
 		idx = -1;
 		val.len=strlen((char*)val.data);
+		val.len = (val.len > rg_var_count) ? rg_var_count : val.len;
+
+		sz = ngx_str_index_of(val.data , val.len ,'$',0);
+		trace_val.len = 0;
+		if(sz > 0){//含状态变量
+			trace_val.data = val.data + sz +1;
+			trace_val.len = val.len - sz - 1;
+			val.len = sz;
+		}
+
 		k = 0;
 		//
 		if(ngx_str_index_of(val.data , val.len ,'&',0) >= 0){//如果是多变量与的关系
-			if(fg == 1) continue;
+//			if(fg == 1) continue;
 			split='&';
 		}
 		sz = ngx_str_find_element_count(val.data , val.len ,split);
-		while( k++ < sz){
+		while( k++ < (ngx_uint_t)sz){
 			idx++;
 			s_t = ngx_str_sch_next_trimtoken(val.data ,val.len ,split,&s_token);
 			if(s_token.len > 0){
@@ -4266,7 +4251,8 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 								tpl = s_tpl;
 								continue;
 							}
-							r_tpl = (fg == 0)? pri_ngx_get_key_region(krc_dt,&tpl_token) : pri_ngx_get_key_tpl_region(krc_dt,&tpl_token);
+//							r_tpl = (fg == 0)? pri_ngx_get_key_region(krc_dt,&tpl_token) : pri_ngx_get_key_tpl_region(krc_dt,&tpl_token);
+							r_tpl = (r_tpl = pri_ngx_get_key_region(krc_dt,&tpl_token)) < 0 ? pri_ngx_get_key_tpl_region(krc_dt,&tpl_token) : r_tpl;
 							if(r_tpl < 0){
 								tpl_sz -= s_tpl - tpl;
 								tpl = s_tpl;
@@ -4276,7 +4262,7 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 						}
 						if(split == '&'){
 							idx_scope = idx_scope_tmp_t;
-							if(idx_scope <= 0) goto tail;
+							if(idx_scope <= 0) continue;//goto tail;
 						}
 					} else {
 						if(split == '&'){//如果是多变量与的关系,找到所有匹配的索引
@@ -4287,7 +4273,8 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 							}
 							continue;
 						}
-						r_tpl = (fg == 0)? pri_ngx_get_key_region(krc_dt,&desc) : pri_ngx_get_key_tpl_region(krc_dt,&desc);
+//						r_tpl = (fg == 0)? pri_ngx_get_key_region(krc_dt,&desc) : pri_ngx_get_key_tpl_region(krc_dt,&desc);
+						r_tpl = (r_tpl = pri_ngx_get_key_region(krc_dt,&desc)) < 0 ? pri_ngx_get_key_tpl_region(krc_dt,&desc) : r_tpl;
 						if( r_tpl < 0 ){
 							continue;
 						}
@@ -4305,16 +4292,55 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 		}
 		if(split == '&' && idx_scope > 0){//如果是多变量与的关系
 			idx_scope_tmp = idx_scope;
-			i = 0;
+			ngx_uint_t j = 0;
 			while( idx_scope == idx_scope_tmp ) {//得到匹配的索引范围中第一个索引
-				i++;
-				idx_scope_tmp = idx_scope_tmp >> i << i;
+				j++;
+				idx_scope_tmp = idx_scope_tmp >> j << j;
 			}
-			r_tpl = (size_t)krc_dt->key_template[i-1][0];
+			r_tpl = (size_t)krc_dt->key_template[j-1][0];
 			goto tail;
 		}
 	}
 	tail:
+	if(r_tpl >= 0 && trace_val.len > 0){
+		desc.len = 0;
+		get_request_value(r,&trace_val,&desc);
+		if(desc.len > 0){//添加到变量列表
+			krc_dt = NULL;
+			ngx_uint_t j;
+			for ( j = 0 ;j < krc->count_variables ; j++) {
+				if(trace_val.len == strlen((char*)krc->variables[j].variable) && ngx_strncmp( trace_val.data, krc->variables[j].variable, trace_val.len ) == 0){
+					krc_dt = &krc->variables[j];
+					break;
+				}
+			}
+			if(krc_dt == NULL) {
+				for( j=krc->count_variables ; j > i+1 ; j--) {
+					krc->variables[j] = krc->variables[j-1];
+				}
+//				krc_dt = &krc->variables[krc->count_variables];
+				krc_dt = &krc->variables[i+1];
+				cpy_chars( (u_char*)krc_dt->variable, trace_val.data, trace_val.len);
+				krc_dt->count_key_template = 0;
+				krc_dt->count = 0;
+				krc->count_variables++;
+				ngx_init_binary_tree(krc_dt->key_regions);
+			}
+
+			ngx_uint_t keyregion = ngx_str_2_hash(&desc);
+			ngx_binary_tree_node_t node_data,*krg;
+			node_data.data = (void*)(keyregion * key_region_key);
+			keyregion = keyregion * key_region_key + r_tpl;
+			krg = ngx_binary_tree_find(krc_dt->key_regions, &node_data,node_compare);
+			if(krg == NULL){
+				krg = &krc_dt->key_regions[krc_dt->count];
+				ngx_init_binary_tree(krg);
+				krg->data = (void*)keyregion;
+				ngx_binary_tree_add_node(krc_dt->key_regions, krg,node_compare);
+				krc_dt->count++;
+			}
+		}
+	}
 	return r_tpl;
 }
 
@@ -4347,8 +4373,8 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
     if(krc == NULL){
     	return default_region;
     }
-    r_tpl = pri_ngx_http_upstream_request_region(r,krc,0);
-    if (r_tpl < 0) r_tpl = pri_ngx_http_upstream_request_region(r,krc,1);
+    r_tpl = pri_ngx_http_upstream_request_region(r,krc);
+//    if (r_tpl < 0) r_tpl = pri_ngx_http_upstream_request_region(r,krc,1);
 	return (r_tpl >= 0) ? r_tpl : default_region;
 }
 

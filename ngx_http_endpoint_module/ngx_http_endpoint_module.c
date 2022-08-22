@@ -224,6 +224,22 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
             //
             buf = append_printf(r->pool, &sucs);
         }
+    } else if(value[0].len == 7 && ngx_strncasecmp(value[0].data, (u_char *)"nocheck", 7) == 0) {
+        if( resource->nelts == 3  ){
+            ngx_str_t *up = &value[1]; //upstream
+            ngx_str_t *sr = &value[2]; //server
+            s_t = sr->data;
+			while(s_t){
+				s_t = ngx_str_sch_next_trimtoken(sr->data ,sr->len ,',',&val_tmp);
+				ngx_xfdf_deal_server(up,&val_tmp,3);
+				if(s_t != NULL){
+					sr->len = sr->len - (s_t - sr->data);
+					sr->data = s_t;
+				}
+			}
+            //
+            buf = append_printf(r->pool, &sucs);
+        }
     } else if(value[0].len == 6 && ngx_strncasecmp(value[0].data, (u_char *)"weight", 6) == 0) {
         if( resource->nelts == 4  ){
             ngx_str_t *up = &value[1]; //upstream

@@ -505,6 +505,80 @@ size_t ngx_num_bit_count(ngx_int_t num)
 	return c;
 }
 
+ngx_array_t *
+ngx_http_endpoint_parse_path(ngx_pool_t *pool, ngx_str_t *path)
+{
+    u_char       *p, *last, *end;
+    ngx_str_t    *str;
+    ngx_array_t  *array;
+
+    array = ngx_array_create(pool, 8, sizeof(ngx_str_t));
+    if (array == NULL) {
+        return NULL;
+    }
+
+    p = path->data + 1;
+    last = path->data + path->len;
+
+    while(p < last) {
+        end = ngx_strlchr(p, last, '/');
+        str = ngx_array_push(array);
+
+        if (str == NULL) {
+            return NULL;
+        }
+
+        if (end) {
+            str->data = p;
+            str->len = end - p;
+
+        } else {
+            str->data = p;
+            str->len = last - p;
+
+        }
+
+        p += str->len + 1;
+    }
+
+    return array;
+}
+
+
+ngx_buf_t *
+append_printf(ngx_pool_t* pool, ngx_str_t *s, ngx_uint_t rt)
+{
+	ngx_buf_t                  *buf = NULL;
+
+	buf = ngx_create_temp_buf(pool, s->len+(rt==1));
+    if (buf != NULL) {
+	    buf->last = (rt==1)? ngx_sprintf(buf->last, "%V\n", s) : ngx_sprintf(buf->last, "%V", s);
+	}
+    return buf;
+}
+
+ngx_buf_t *
+more_append_printf(ngx_pool_t* pool, size_t size, ...)
+{
+	ngx_buf_t                  *buf = NULL;
+	ngx_str_t *var;
+	buf = ngx_create_temp_buf(pool, size);
+
+    if (buf != NULL) {
+		va_list   args;
+		va_start(args, size);
+		while(size > 0) {
+			var = va_arg( args , ngx_str_t* );
+			buf->last = ngx_sprintf(buf->last, "%V", var);
+			size -= var->len ;
+		}
+		va_end(args);
+		buf->last = ngx_sprintf(buf->last, "\n");
+	}
+
+    return buf;
+}
+
 ngx_link_t *ngx_link_init_link(ngx_link_t *link)
 {
 	link->last = link->first = NULL;

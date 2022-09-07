@@ -65,6 +65,9 @@ size_t ngx_num_bit_count(ngx_int_t num);
 ngx_int_t ngx_str_index_of(u_char *s , size_t len, u_char c ,ngx_uint_t begin);
 ngx_int_t ngx_str_to_int(u_char *line, size_t n);
 ngx_int_t ngx_str_cmp(ngx_str_t *v1 ,ngx_str_t *v2);
+ngx_array_t *ngx_http_endpoint_parse_path(ngx_pool_t *pool, ngx_str_t *path);
+ngx_buf_t *append_printf(ngx_pool_t* pool, ngx_str_t *s, ngx_uint_t rt);
+ngx_buf_t *more_append_printf(ngx_pool_t* pool, size_t size, ...);
 
 /*http request function*/
 //get http url parameter

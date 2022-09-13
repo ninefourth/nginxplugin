@@ -223,12 +223,15 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     			f.data = (u_char*)ngx_strcpy(r->pool,&f);
     			ngx_reload_var_conf(&f,varname);
     			buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
-        	}
+			}
     	}else if( resource->nelts == 3 &&  value[2].len == 4 && ngx_strncasecmp(value[2].data, (u_char *)"list", 4) == 0){
-    		ngx_str_t *varname = &value[1]; //variable name
-    		buf_sz = ngx_http_out_content(r->pool,varname,&out,1);
+			ngx_str_t *varname = &value[1]; //variable name
+			out.buf = ngx_list_var(r->pool,varname);
+			out.buf->last_buf = 1;
+			out.next = NULL;
+			buf_sz = ngx_buf_size(out.buf);
     	}
-    } else if (value[0].len == 6 && ngx_strncasecmp(value[0].data, (u_char *)"region", 6) == 0 ) {
+	} else if (value[0].len == 6 && ngx_strncasecmp(value[0].data, (u_char *)"region", 6) == 0 ) {
     	if( resource->nelts == 2 ){
     		ngx_str_t *upstream = &value[1]; //upstream name
         	ngx_str_t f;

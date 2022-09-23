@@ -172,6 +172,9 @@ fzy.sm7.fxscm.net   1
 [split_/_uri$cookie_session]
 shopedi 2
 
+#特殊规则
+region默认规则是1;upstream的region规则如果为99,router配置中为1和99的访问均可负载过来
+
 #重置upstream分区
 http://localhost:8100/region/[upstream]?conf=conf/include/region.cnf
 #重置访问路由规则

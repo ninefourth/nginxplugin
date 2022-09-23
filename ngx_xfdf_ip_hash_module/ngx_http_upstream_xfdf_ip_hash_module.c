@@ -31,6 +31,8 @@ xfdf_ip_hash指令只有一个参数：
 #include "ngx_http_upstream_check_module.h"
 #endif
 
+extern ngx_module_t  ngx_http_rewrite_module;
+
 //客户端peer的数据
 typedef struct {
     /* the round robin data must be first */
@@ -70,6 +72,7 @@ typedef struct {
     u_char				deep;//xfdf_ip_hash指令的数字参数
     ngx_http_upstream_chash_points_t   *points;
     ngx_int_t                          remoteaddr_index;//$remote_addr变量在系统变量表中的位置，取值时使用位置
+    uintptr_t                   reverse;
 }ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t;
 
 //一致性哈希算法的情况下peer的数据
@@ -121,6 +124,19 @@ static ngx_int_t ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc,
 void *
 ngx_xfdf_deal_server_get_peer(ngx_http_upstream_rr_peer_t **fstp ,ngx_str_t *up , ngx_str_t *sr);
 
+typedef struct {
+    ngx_array_t  *codes;        /* uintptr_t */
+    ngx_uint_t    stack_size;
+    ngx_flag_t    log;
+    ngx_flag_t    uninitialized_variable_warn;
+} ext_ngx_http_rewrite_loc_conf_t;
+
+typedef struct {
+    ngx_http_script_code_pt     code;
+    ngx_str_t                *hash_var;
+    uintptr_t                   index;
+} ngx_http_hash_var_code_t;
+
 //模块指令
 static ngx_command_t  ngx_http_upstream_xfdf_ip_hash_commands[] = {
 
@@ -138,11 +154,11 @@ static ngx_command_t  ngx_http_upstream_xfdf_ip_hash_commands[] = {
 		NULL },
       ngx_null_command
 };
-
+//static ngx_int_t ngx_http_hash_var_init(ngx_conf_t *cf);
 //模块环境参数
 static ngx_http_module_t  ngx_http_upstream_xfdf_ip_hash_module_ctx = {
     NULL,                                  /* preconfiguration */
-    NULL,                                  /* postconfiguration */
+	NULL, //ngx_http_hash_var_init,            /* postconfiguration */
 
     NULL,                                  /* create main configuration */
     NULL,                                  /* init main configuration */
@@ -476,7 +492,7 @@ ngx_http_upstream_rr_peer_t*
 ngx_upstream_region_peer(ngx_http_upstream_rr_peer_t *peer ,ngx_uint_t region)
 {
 	ngx_uint_t r = ngx_http_upstream_get_peer_region(peer);
-	while(r!=0 && region!=0 && r!= region){
+	while( (r!=0 && region!=0 && r!= region) && !(r == 99 && region == 1)){//后半部的判断:当upstream的region为99时,region为1也匹配
 		if(peer->next == NULL) {
 			break;
 		}
@@ -542,7 +558,7 @@ ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *xfdfcf;
     ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t		*xfdflcf;
 
-    xfdfcf = ngx_http_conf_upstream_srv_conf(us, ngx_http_upstream_xfdf_ip_hash_module);
+    xfdfcf = ngx_http_get_module_srv_conf(r, ngx_http_upstream_xfdf_ip_hash_module);
     xfdflcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_xfdf_ip_hash_module);
     r->upstream->peer.data = &iphp->rrp;
 
@@ -561,6 +577,12 @@ ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
     }
     if(hash_v != NULL) {
     	get_request_value(r,hash_v, &iphp->hash_v_val);
+    }else {
+    	if (xfdfcf->reverse > 0) {
+    		iphp->hash_v_val.len = r->variables[xfdfcf->reverse].len;
+    		iphp->hash_v_val.data = r->variables[xfdfcf->reverse].data;
+    		xfdfcf->reverse = 0;
+    	}
     }
 
 
@@ -1437,7 +1459,7 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,void *data)
     {
 		#if (NGX_HTTP_UPSTREAM_CHECK)
     		ngx_uint_t r= ngx_http_upstream_get_peer_region(peer);
-    		if(need_region && r!=0 && exrrp->region!=0 && r!= exrrp->region ){
+    		if(need_region && r!=0 && exrrp->region!=0 && r!= exrrp->region && !(r == 99 && exrrp->region == 1)){
     			continue;
     		}
 		#endif
@@ -1610,17 +1632,71 @@ failed:
 }
 
 /**-- end --**/
+/*
+static ngx_int_t
+ngx_http_hash_var_handler(ngx_http_request_t *r)
+{
+	return NGX_OK;
+}
+
+static ngx_int_t
+ngx_http_hash_var_init(ngx_conf_t *cf)
+{
+	ngx_http_handler_pt        *h;
+	ngx_http_core_main_conf_t  *cmcf;
+	cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
+	h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+	if (h == NULL) {
+		return NGX_ERROR;
+	}
+	*h = ngx_http_hash_var_handler;
+	return NGX_OK;
+}
+*/
+void
+ngx_http_script_hash_var_code(ngx_http_script_engine_t *e)
+{
+	ngx_http_hash_var_code_t  *code;
+	ngx_http_request_t	*r;
+	ngx_str_t	desc;
+    code = (ngx_http_hash_var_code_t *) e->ip;
+    r = e->request;
+    ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *xfdfcf;
+    ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t		*xfdflcf;
+    xfdfcf = ngx_http_get_module_srv_conf(r, ngx_http_upstream_xfdf_ip_hash_module);
+    xfdflcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_xfdf_ip_hash_module);
+    xfdfcf->reverse = code->index;
+    get_request_value(r, &xfdflcf->hash_var , &desc);
+    r->variables[xfdfcf->reverse].len = desc.len;
+	r->variables[xfdfcf->reverse].valid = 1;
+	r->variables[xfdfcf->reverse].no_cacheable = 0;
+	r->variables[xfdfcf->reverse].not_found = 0;
+	r->variables[xfdfcf->reverse].data = desc.data;
+
+    e->ip += sizeof(ngx_http_hash_var_code_t);
+}
+
 static char *
 ngx_http_upstream_hash_var(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
 	ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t		*xfdflcf = conf;
 	ngx_str_t                          *value, *valcnf;
+	ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *xfdfcf;
+	xfdfcf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_upstream_xfdf_ip_hash_module);
 	value = cf->args->elts;
 	valcnf = (ngx_str_t *) ((char *) xfdflcf + cmd->offset);
 	valcnf->data = value[1].data;
 	valcnf->len = value[1].len;
+	xfdfcf->reverse = 0;
 //	xfdflcf->hash_var.data = value[1].data;
 //	xfdflcf->hash_var.len = value[1].len;
+	ngx_http_conf_ctx_t *ctx;
+	ctx = (ngx_http_conf_ctx_t*)cf->ctx;
+	ext_ngx_http_rewrite_loc_conf_t *nlcf = ctx->loc_conf[ngx_http_rewrite_module.ctx_index];
+	ngx_http_hash_var_code_t *code = ngx_array_push_n(nlcf->codes, sizeof(ngx_http_hash_var_code_t));
+	code->hash_var = valcnf;
+	code->code = ngx_http_script_hash_var_code;
+	code->index = ngx_http_get_variable_index(cf, valcnf);
 	return NGX_CONF_OK;
 }
 

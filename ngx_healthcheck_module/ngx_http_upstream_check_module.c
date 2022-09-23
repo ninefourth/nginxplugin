@@ -2248,7 +2248,8 @@ ngx_http_upstream_get_region_total_weight(void *fstp , ngx_uint_t region)
 
 	for( ; peer; peer=peer->next ) {
 		p = ngx_http_upstream_check_get_peer_by_peer(peer);
-		if(p->shm->region == region || p->shm->region == 0){
+		//upstream中region=99与=1等价，只是访问的region为99只与upstream的region=99对应，不与1对应=
+		if( p->shm->region == region || p->shm->region == 0 || (p->shm->region == 99 && region == 1)){
 			if(!p->shm->weight) {
 				p->shm->weight = p->weight;
 			}

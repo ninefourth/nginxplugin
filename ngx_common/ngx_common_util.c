@@ -489,9 +489,10 @@ ngx_int_t ngx_math_log2(ngx_int_t x)
 
 ngx_uint_t ngx_math_pow(ngx_uint_t x , ngx_uint_t y)
 {
+	ngx_uint_t f = x;
 	if(y == 0) x = 1;
 	while(y-- > 1){
-		x *= x;
+		x *= f;
 	}
 	return x;
 }

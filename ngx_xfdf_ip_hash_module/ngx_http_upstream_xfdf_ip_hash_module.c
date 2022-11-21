@@ -205,6 +205,9 @@ static ngx_str_t str_ed=ngx_string(" }\n");
 
 static ngx_str_t hash_var=ngx_string("hashvar");
 
+//表示访问不要传到上游，直接失败
+#define	invalid_reg	65535
+
 ngx_http_variable_t *
 ngx_http_get_variable_by_name(ngx_conf_t *cf, ngx_str_t *name)
 {
@@ -353,7 +356,7 @@ ngx_xfdf_list_upstreams()
     for (i=0; i<xfdf_ups->upstreams->nelts; i++){
         len += str_up.len + ups[i].name->len + str_st.len;
         for (j=0; j < ups[i].num; j++) {
-        	char swt[4], srg[4]={'0',0};
+        	char swt[4], srg[5]={'0',0,0,0,0};
             #if (NGX_HTTP_UPSTREAM_CHECK)
 			    sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer));
 			    sprintf(srg,"%lu",ngx_http_upstream_get_peer_region(ups[i].peers[j].peer));
@@ -381,7 +384,7 @@ ngx_xfdf_list_upstreams()
             
             for (j=0; j < ups[i].num; j++) {
                 ngx_uint_t wtlen;
-                char swt[4] , srg[4]={'0',0} ;
+                char swt[4] , srg[5]={'0',0,0,0,0};
                 #if (NGX_HTTP_UPSTREAM_CHECK)
                     sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer));
     			    sprintf(srg,"%lu",ngx_http_upstream_get_peer_region(ups[i].peers[j].peer));
@@ -492,7 +495,8 @@ ngx_http_upstream_rr_peer_t*
 ngx_upstream_region_peer(ngx_http_upstream_rr_peer_t *peer ,ngx_uint_t region)
 {
 	ngx_uint_t r = ngx_http_upstream_get_peer_region(peer);
-	while( (r!=0 && region!=0 && r!= region) && !(r == 99 && region == 1)){//后半部的判断:当upstream的region为99时,region为1也匹配
+//	while( (r!=0 && region!=0 && r!= region) && !(r == 99 && region == 1)){//后半部的判断:当upstream的region为99时,region为1也匹配
+	while( (r!=0 && region!=0 && !(r & region) )){//区域互不包含
 		if(peer->next == NULL) {
 			break;
 		}
@@ -637,6 +641,11 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, pc->log, 0, "xfdf --- get ip hash peer, try: %ui", pc->tries);
 
     /* TODO: cached */
+
+    //表示访问不要传到上游，直接失败
+    if ( iphp->region == invalid_reg) {
+    	return NGX_BUSY;
+    }
 
     ngx_http_upstream_rr_peers_wlock(iphp->rrp.peers);
 
@@ -1448,6 +1457,11 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,void *data)
     best = NULL;
     total = 0;
 
+    //表示不要传到上游，直接访问失败
+    if ( exrrp->region == invalid_reg) {
+		return NULL;
+	}
+
 #if (NGX_SUPPRESS_WARN)
     p = 0;
 #endif
@@ -1459,7 +1473,8 @@ ngx_http_upstream_get_peer_rr(ngx_peer_connection_t *pc,void *data)
     {
 		#if (NGX_HTTP_UPSTREAM_CHECK)
     		ngx_uint_t r= ngx_http_upstream_get_peer_region(peer);
-    		if(need_region && r!=0 && exrrp->region!=0 && r!= exrrp->region && !(r == 99 && exrrp->region == 1)){
+//    		if(need_region && r!=0 && exrrp->region!=0 && r!= exrrp->region && !(r == 99 && exrrp->region == 1)){
+    		if(need_region && r!=0 && exrrp->region!=0 && !(r & exrrp->region) ){
     			continue;
     		}
 		#endif
@@ -1564,6 +1579,10 @@ ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc, void *data)
 
 	peers = rrp->peers;
 	ngx_http_upstream_rr_peers_wlock(peers);
+
+	if ( exrrp->region == invalid_reg) {
+		goto failed;
+	}
 
 	if (peers->single) {
 		peer = peers->peer;

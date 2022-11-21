@@ -128,6 +128,41 @@ u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t 
     return c_ret;
 }
 
+//阶加位置从1开始
+void ngx_reverse_termial(ngx_uint_t *c , ngx_uint_t *f, ngx_uint_t n)
+{
+	ngx_uint_t t = termial(*f);
+	if(t >= n){
+		*c = t-n;
+		return;
+	}else {
+		(*f)++;
+		ngx_reverse_termial(c,f,n);
+	}
+}
+/*
+ * 第四阶	0000
+ * 第三阶	 000
+ * 第二阶	  00
+ * 第一阶	   0
+ * 本函数计算所有包含分隔符的情况，比如 a/b/c,以/为分隔符，穷举为 , a,a/b,a/b/c,b,b/c,c，所以这是一个 阶加(termial) 的过程。
+ * 以 阶数-索引-索引... 做为标识，大排行的例子(上面的阶表)依次为，1-0, 2-0-1, 2-0, 3-0-1-2, 3-1-2, 3-2, 4-0-1-2-3, 4-1-2-3, 4-2-3, 4-3...
+ * s要查找的串，sz共有多少个被分隔的字串，pos要查找几个字符(从0开始)，c分隔符，token返回值
+ * */
+u_char*
+ngx_str_sch_next_trimtoken_full(ngx_str_t *s ,ngx_uint_t sz, ngx_uint_t pos, u_char c , ngx_str_t *token)
+{
+	ngx_str_t s_tmp;
+	ngx_uint_t col=0,f=1;//代表某阶的第几列，和某阶
+	ngx_reverse_termial(&col,&f,pos+1);//查找pos位置属于某阶的第几个位置
+	ngx_str_sch_idx_trimtoken(s->data,s->len,c,sz-f,token);
+	if(col > 0){
+		ngx_str_sch_idx_trimtoken(s->data,s->len,c,sz-f+col,&s_tmp);
+		token->len += s_tmp.len + 1; //包含1位分隔符
+	}
+	return token->data;
+}
+
 //ngx_str_t to a hash code
 ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size)
 {
@@ -497,6 +532,15 @@ ngx_uint_t ngx_math_pow(ngx_uint_t x , ngx_uint_t y)
 	return x;
 }
 
+ngx_uint_t termial(ngx_uint_t x)
+{
+	return x*(x+1)/2 ;
+}
+
+ngx_uint_t factorial(ngx_uint_t x){
+	return (x == 1)? x : x*factorial(x-1);
+}
+
 size_t ngx_num_bit_count(ngx_int_t num)
 {
 	size_t c = 1;
@@ -504,6 +548,32 @@ size_t ngx_num_bit_count(ngx_int_t num)
 		c++;
 	}
 	return c;
+}
+
+u_char*
+ngx_uint2char(u_char* des,ngx_uint_t value,size_t len)
+{
+	ngx_uint_t l=0 ;
+	u_char *v;
+	v = (u_char*)(&value);
+	while(len > l){
+		des[l]=v[l];
+		l++;
+	}
+	return des;
+}
+
+ngx_uint_t
+ngx_char2uint(u_char* value,size_t len)
+{
+	ngx_uint_t val = 0, l = 0 ;
+	u_char *v;
+	v = (u_char*)(&val);
+	while(len > l){
+		v[l]=value[l];
+		l++;
+	}
+	return val;
 }
 
 ngx_array_t *

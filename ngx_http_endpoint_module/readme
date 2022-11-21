@@ -173,7 +173,9 @@ fzy.sm7.fxscm.net   1
 shopedi 2
 
 #特殊规则
-region默认规则是1;upstream的region规则如果为99,router配置中为1和99的访问均可负载过来
+1.region默认规则是1;
+2.如果router配置目标region为65535,则访问直接返回502
+3.upstream中region的设置依据为按位,取值对应1,2,4,8,16,32,64,128...(也可以是65535之内的任意值，但不建议),在router的配置中如果需要对应多region,则router中的key对应的region值取region配置中相应region值的合(即是按位与)
 
 #重置upstream分区
 http://localhost:8100/region/[upstream]?conf=conf/include/region.cnf

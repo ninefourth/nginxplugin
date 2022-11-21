@@ -59,9 +59,9 @@ ngx_uint_t read_line(u_char *buf);
 ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len);
 ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c);
 u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *token);
+u_char *ngx_str_sch_next_trimtoken_full(ngx_str_t *s ,ngx_uint_t sz, ngx_uint_t pos, u_char c , ngx_str_t *token);
 ngx_int_t ngx_str_sch_idx_trimtoken(u_char *s , size_t len, u_char c , ngx_int_t idx, ngx_str_t *token);
 ngx_int_t ngx_str_sch_last_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *left , ngx_str_t *right);
-size_t ngx_num_bit_count(ngx_int_t num);
 ngx_int_t ngx_str_index_of(u_char *s , size_t len, u_char c ,ngx_uint_t begin);
 ngx_int_t ngx_str_to_int(u_char *line, size_t n);
 ngx_int_t ngx_str_cmp(ngx_str_t *v1 ,ngx_str_t *v2);
@@ -85,8 +85,14 @@ ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t 
 ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr);
 
 //math
-ngx_int_t ngx_math_log2(ngx_int_t x);
-ngx_uint_t ngx_math_pow(ngx_uint_t x , ngx_uint_t y);
+ngx_int_t ngx_math_log2(ngx_int_t x); //以2为底的对数
+ngx_uint_t ngx_math_pow(ngx_uint_t x , ngx_uint_t y); //x的y次方
+ngx_uint_t termial(ngx_uint_t x); //阶加
+ngx_uint_t factorial(ngx_uint_t x); //阶乘
+size_t ngx_num_bit_count(ngx_int_t num);//判断给定整数num是几位数
+
+u_char* ngx_uint2char(u_char* des,ngx_uint_t value,size_t len);
+ngx_uint_t ngx_char2uint(u_char* value,size_t len);
 
 //file
 void ngx_append_line_file(ngx_str_t *cnf_file , ngx_str_t *line );

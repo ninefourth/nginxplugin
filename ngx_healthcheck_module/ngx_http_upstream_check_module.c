@@ -81,14 +81,15 @@ struct {
 } up_region_cnfs;
 
 #define key_region_count 500 //router配置每个变量最多允许的条目数
-#define key_region_key 1000 //
+#define key_region_key 65535 //
+#define tpl_reg_pos 2 //router模板情况下，key_template存储的内容前几位用于存储region
 /*typedef struct {
 	ngx_binary_tree_node_t    node; //data = &key_region_conf_t
 	ngx_uint_t      key_hash;
 	ngx_uint_t      region;
 } key_region_conf_t ;*/
 #define rg_var_count 40 //router配置文件中变量名最长字节数
-#define str_count 50 //router配置文件中 模糊查询用的模板字符串长度
+#define str_count 100 //router配置文件中 模糊查询用的模板字符串长度
 #define key_tpl_count 100 //router配置文件中 模糊查询用的模板最多允许有多少
 // typedef u_char string[str_count];
 #define  key_region_vars_count 100 //router配置文件中,允许的变量最大数目
@@ -1223,6 +1224,7 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
 	ngx_binary_tree_node_t   *krg, *root;
 	u_char			*wck;
 	key_region_confs_detail_t  *krcfdt = NULL;
+	ngx_uint_t		rg;
 
 	fd = ngx_open_file(f->data, NGX_FILE_RDONLY, NGX_FILE_OPEN, 0);
 
@@ -1266,8 +1268,10 @@ void ngx_reload_loc_router_conf(ngx_str_t *f,ngx_http_upstream_check_loc_conf_t 
                                 		if(ngx_str_sch_last_trimtoken(buf ,sz ,' ',&s_token,&r_token)) {
                                 			if(fg || ngx_str_index_of(s_token.data,s_token.len,'*',0) >= 0){//wildchar
 												wck = (u_char*)krcfdt->key_template[krcfdt->count_key_template++];
-												cpy_chars(wck+sizeof(u_char),s_token.data,s_token.len);
-												wck[0] = (u_char)ngx_atoi(r_token.data, r_token.len);
+												cpy_chars(wck+sizeof(u_char)*tpl_reg_pos,s_token.data,s_token.len);
+												rg=ngx_atoi(r_token.data, r_token.len);
+												ngx_uint2char(wck,rg,2);
+//												wck[0] = (u_char)ngx_atoi(r_token.data, r_token.len);
 											} else {
 												keyregion = ngx_str_2_hash(&s_token);
 												keyregion = keyregion * key_region_key +ngx_atoi(r_token.data, r_token.len);
@@ -1511,15 +1515,20 @@ void ngx_add_router_item(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_uint_t i
 				//找通配符模板
 				if( ngx_str_index_of(key->data,key->len,'*',0) >= 0){//wildchar
 					for( i_tpl = 0 ;i_tpl < krc->variables[idx].count_key_template ;i_tpl++){
-						tpl = (u_char*)krc->variables[idx].key_template[i_tpl];//通配符模板第一字节记录的是region
-						if (strlen((char*)tpl) != key->len + 1 || ngx_strncasecmp(key->data, tpl+sizeof(u_char), key->len) != 0 ) {
+						tpl = (u_char*)krc->variables[idx].key_template[i_tpl];//通配符模板第n字节记录的是region
+						tpl = tpl+sizeof(u_char)*tpl_reg_pos;
+						if (strlen((char*)tpl) != key->len || ngx_strncasecmp(key->data, tpl, key->len) != 0 ) {
 							continue;
 						}else {
 							return;
 						}
 					}
-					krc->variables[idx].key_template[i_tpl][0] = region;
-					cpy_chars( &krc->variables[idx].key_template[i_tpl][1] ,key->data,key->len);
+					tpl = (u_char*)krc->variables[idx].key_template[i_tpl];
+					ngx_uint2char(tpl,region,tpl_reg_pos);
+//					krc->variables[idx].key_template[i_tpl][0] = region;ngx_char2uint(tpl,tpl_reg_pos);
+//					cpy_chars( &krc->variables[idx].key_template[i_tpl][1] ,key->data,key->len);
+					tpl = tpl+sizeof(u_char)*tpl_reg_pos;
+					cpy_chars(tpl,key->data,key->len);
 					krc->variables[idx].count_key_template++;
 					goto savefile;
 				}
@@ -1618,8 +1627,9 @@ ngx_int_t pri_ngx_get_key_tpl_index(key_region_confs_t *krc , ngx_str_t *desc)
 		for( ;i_tpl < krc->variables[i].count_key_template ;i_tpl++){
 			k_tpl = 0; h_tpl = 0; t_tpl = 0;
 			tpl = (u_char*)krc->variables[i].key_template[i_tpl];
-			r_tpl = (size_t)tpl[0];
-			tpl = tpl +sizeof(u_char);
+//			r_tpl = (size_t)tpl[0];
+			r_tpl = ngx_char2uint(tpl,tpl_reg_pos);
+			tpl = tpl +sizeof(u_char)*tpl_reg_pos;
 			sz_tpl = ngx_str_find_element_count(tpl, strlen((char*)tpl) ,'*');
 			if(tpl[0] != '*') h_tpl=1;//键不是以*开始，即是要求对比必须是从0位置就开始相等
 			if(tpl[strlen((char*)tpl)-1] != '*') t_tpl=1;//键不是以*结尾，即是要求结尾部分相等
@@ -1683,7 +1693,7 @@ loop:
 		if( (p | idx_scope) != idx_scope ) continue;
 		idx_scope -= p;
 		tpl = (u_char*)krc_dt->key_template[i_tpl];
-		tpl = tpl +sizeof(u_char);//第一位是区号,不需要
+		tpl = tpl +sizeof(u_char)*tpl_reg_pos;//第n位是区号,不需要
 		if (ngx_str_sch_idx_trimtoken(tpl,strlen((char*)tpl),' ',col_idx,&tpl_sp_token) == NGX_FALSE) return NGX_FALSE;
 		sz_tpl = ngx_str_find_element_count(tpl_sp_token.data, tpl_sp_token.len ,'*');
 		if(sz_tpl <= 0) {
@@ -1743,8 +1753,9 @@ ngx_int_t pri_ngx_get_key_tpl_region(key_region_confs_detail_t *krc_dt , ngx_str
 		for( ;i_tpl < krc_dt->count_key_template ;i_tpl++){
 			k_tpl = 0; h_tpl = 0; t_tpl = 0;
 			tpl = (u_char*)krc_dt->key_template[i_tpl];
-			r_tpl = (size_t)tpl[0];
-			tpl = tpl +sizeof(u_char);
+//			r_tpl = (size_t)tpl[0];
+			r_tpl = ngx_char2uint(tpl,tpl_reg_pos);
+			tpl = tpl +sizeof(u_char)*tpl_reg_pos;
 			sz_tpl = ngx_str_find_element_count(tpl, strlen((char*)tpl) ,'*');
 			if(tpl[0] != '*') h_tpl=1;//键不是以*开始，即是要求对比必须是从0位置就开始相等
 			tpl_len=strlen((char*)tpl);
@@ -1896,11 +1907,11 @@ int_in_ints(ngx_uint_t *array , ngx_uint_t value ,size_t len)
 static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_item_list *items , ngx_int_t all)
 {
 	ngx_str_t s,s_tmp ,s_token;
-	ngx_str_t *sh;
+//	ngx_str_t *sh;
 	ngx_uint_t *idx = NULL ;
 //	ngx_http_variable_value_t *vl;
-	ngx_int_t i=0,j=0, fg,ret,sz=0;
-	u_char split_c ,*s_t;
+	ngx_int_t i=0,j=0, fg,ret,sz=0,fsz=0;
+	u_char split_c /*,*s_t*/;
 
 	fg= NGX_TRUE;
 	ret = NGX_FALSE;
@@ -1922,8 +1933,14 @@ static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_
 		if(s_tmp.len > 0){
 			if (split_c){
 				sz = ngx_str_find_element_count(s_tmp.data , s_tmp.len ,split_c);
-				idx = ngx_palloc(r->pool, sz*sizeof(ngx_uint_t));
-				sh=&s_tmp;
+				fsz = termial(sz);
+				idx = ngx_palloc(r->pool, fsz*sizeof(ngx_uint_t));
+				while( j < fsz ){
+					ngx_str_sch_next_trimtoken_full(&s_tmp,sz,j,split_c,&s_token);
+					idx[j]=ngx_str_2_hash(&s_token);
+					j++;
+				}
+				/*sh=&s_tmp;
 				while( j < sz){
 					s_t = ngx_str_sch_next_trimtoken(sh->data ,sh->len ,split_c,&s_token);
 					if(s_token.len > 0){
@@ -1936,7 +1953,7 @@ static ngx_int_t custom_variable_and_value( ngx_http_request_t *r,ngx_variables_
 					}else {
 						break;
 					}
-				}
+				}*/
 			} else {
 				sz=1;
 				idx = ngx_palloc(r->pool, sz*sizeof(ngx_uint_t));
@@ -2249,7 +2266,9 @@ ngx_http_upstream_get_region_total_weight(void *fstp , ngx_uint_t region)
 	for( ; peer; peer=peer->next ) {
 		p = ngx_http_upstream_check_get_peer_by_peer(peer);
 		//upstream中region=99与=1等价，只是访问的region为99只与upstream的region=99对应，不与1对应=
-		if( p->shm->region == region || p->shm->region == 0 || (p->shm->region == 99 && region == 1)){
+//		if( p->shm->region == region || p->shm->region == 0 || (p->shm->region == 99 && region == 1)){
+		//区域按位包含设定的位置
+		if( (p->shm->region & region) || p->shm->region == 0) {
 			if(!p->shm->weight) {
 				p->shm->weight = p->weight;
 			}
@@ -4185,11 +4204,11 @@ ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc,ng
 ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region_confs_t *krc)
 {
 	ngx_str_t val,desc ,s_token,tpl_token, trace_val;
-	ngx_uint_t  k,split_sz;
-	u_char *s_t, split_c, *tpl, *s_tpl;
+	ngx_uint_t  k,split_sz,split_fsz;
+	u_char *s_t, split_c/*, *tpl, *s_tpl*/;
 	ngx_int_t	r_tpl = default_region;
 	ngx_int_t idx_scope,idx,idx_scope_tmp,idx_scope_tmp_t,sz;
-	size_t i,tpl_sz;
+	size_t i/*,tpl_sz*/;
 	u_char split;
 	key_region_confs_detail_t *krc_dt;
 
@@ -4240,10 +4259,26 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 				if(desc.len > 0){
 					if(split_c){
 						split_sz = ngx_str_find_element_count(desc.data , desc.len ,split_c);
-						tpl = desc.data;
-						tpl_sz = desc.len;
+						split_fsz = termial(split_sz);
+//						tpl = desc.data;
+//						tpl_sz = desc.len;
 						idx_scope_tmp_t = 0;
-						while(split_sz-- > 0) {
+
+						while(split_fsz-- > 0){
+							ngx_str_sch_next_trimtoken_full(&desc,split_sz,split_fsz,split_c,&tpl_token);
+							if(split == '&'){//如果是多变量与的关系,找到所有匹配的索引
+								idx_scope_tmp = pri_ngx_get_key_tpl_pos(krc_dt,&tpl_token,idx_scope,idx);
+								idx_scope_tmp_t |= idx_scope_tmp;//split_模式的token是或的关系做匹配
+								continue;
+							}
+							r_tpl = (r_tpl = pri_ngx_get_key_region(krc_dt,&tpl_token)) < 0 ? pri_ngx_get_key_tpl_region(krc_dt,&tpl_token) : r_tpl;
+							if(r_tpl < 0){
+								continue;
+							}
+							goto tail;
+						}
+
+						/*while(split_sz-- > 0) {
 							s_tpl = ngx_str_sch_next_trimtoken(tpl ,tpl_sz ,split_c, &tpl_token);
 							if(split == '&'){//如果是多变量与的关系,找到所有匹配的索引
 								idx_scope_tmp = pri_ngx_get_key_tpl_pos(krc_dt,&tpl_token,idx_scope,idx);
@@ -4260,7 +4295,7 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 								continue;
 							}
 							goto tail;
-						}
+						}*/
 						if(split == '&'){
 							idx_scope = idx_scope_tmp_t;
 							if(idx_scope <= 0) continue;//goto tail;
@@ -4298,7 +4333,8 @@ ngx_uint_t pri_ngx_http_upstream_request_region(ngx_http_request_t *r,key_region
 				j++;
 				idx_scope_tmp = idx_scope_tmp >> j << j;
 			}
-			r_tpl = (size_t)krc_dt->key_template[j-1][0];
+			r_tpl = ngx_char2uint(krc_dt->key_template[j-1],tpl_reg_pos);
+//			r_tpl = (size_t)krc_dt->key_template[j-1][0];
 			goto tail;
 		}
 	}

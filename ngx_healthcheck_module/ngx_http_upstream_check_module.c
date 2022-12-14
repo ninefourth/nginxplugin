@@ -160,6 +160,8 @@ typedef struct {
     ngx_atomic_i_t                           v_total_weight;
     //upstream name in hash code
     ngx_uint_t                                upstream_name;
+    //server name in hash code
+    ngx_uint_t									server_name;
     //the server in which region
     ngx_uint_t                                region;
 
@@ -610,8 +612,9 @@ static ngx_int_t ngx_http_upstream_check_get_shm_name(ngx_str_t *shm_name,
 static ngx_shm_zone_t *ngx_shared_memory_find(ngx_cycle_t *cycle,
     ngx_str_t *name, void *tag);
 static ngx_http_upstream_check_peer_shm_t *
-ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *peers_shm,
-    ngx_addr_t *addr ,ngx_str_t *upname);
+ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *peers_shm,ngx_addr_t *addr ,ngx_str_t *upname);
+static ngx_http_upstream_check_peer_shm_t *
+ngx_http_upstream_check_find_shm_peer_by_server_name(ngx_http_upstream_check_peers_shm_t *p, ngx_str_t *server ,ngx_str_t *upname);
 
 static ngx_int_t ngx_http_upstream_check_init_shm_peer(
     ngx_http_upstream_check_peer_shm_t *peer_shm,
@@ -2145,10 +2148,18 @@ ngx_http_upstream_check_get_peer_by_peer(void *peer)
     		}
     	}
 
+    	if( i == check_peers_ctx->peers.nelts) {
+    		for (i = 0; i < check_peers_ctx->peers.nelts ; i++){
+    			if (p[i].peer_mem_addr != NULL &&
+    					ngx_str_cmp(&p[i].peer_mem_addr->server,&((ngx_http_upstream_rr_peer_t*)peer)->server) == 0 ) {
+					p = &p[i];
+					break;
+				}
+			}
+    	}
+
     	return p;
 }
-
-
 
 static ngx_int_t
 ngx_http_upstream_check_addr_change_port(ngx_pool_t *pool, ngx_addr_t *dst,
@@ -2265,8 +2276,6 @@ ngx_http_upstream_get_region_total_weight(void *fstp , ngx_uint_t region)
 
 	for( ; peer; peer=peer->next ) {
 		p = ngx_http_upstream_check_get_peer_by_peer(peer);
-		//upstream中region=99与=1等价，只是访问的region为99只与upstream的region=99对应，不与1对应=
-//		if( p->shm->region == region || p->shm->region == 0 || (p->shm->region == 99 && region == 1)){
 		//区域按位包含设定的位置
 		if( (p->shm->region & region) || p->shm->region == 0) {
 			if(!p->shm->weight) {
@@ -2443,13 +2452,12 @@ ngx_http_upstream_check_add_timers(ngx_cycle_t *cycle)
             continue;
         }
 
-        peer[i].check_ev.handler = ngx_http_upstream_check_begin_handler;
+        peer[i].check_ev.handler = ngx_http_upstream_check_begin_handler; //检测的处理
         peer[i].check_ev.log = cycle->log;
         peer[i].check_ev.data = &peer[i];
         peer[i].check_ev.timer_set = 0;
 
-        peer[i].check_timeout_ev.handler =
-            ngx_http_upstream_check_timeout_handler;
+        peer[i].check_timeout_ev.handler = ngx_http_upstream_check_timeout_handler; //超时的处理
         peer[i].check_timeout_ev.log = cycle->log;
         peer[i].check_timeout_ev.data = &peer[i];
         peer[i].check_timeout_ev.timer_set = 0;
@@ -2463,8 +2471,8 @@ ngx_http_upstream_check_add_timers(ngx_cycle_t *cycle)
             }
         }
 
-        peer[i].send_handler = cf->send_handler;
-        peer[i].recv_handler = cf->recv_handler;
+        peer[i].send_handler = cf->send_handler; //检测向后端发送请求
+        peer[i].recv_handler = cf->recv_handler; //检测，接收后端的返回,用以判定peer是否可用
 
         peer[i].init = cf->init;
         peer[i].parse = cf->parse;
@@ -2510,6 +2518,7 @@ ngx_http_upstream_check_begin_handler(ngx_event_t *event)
     peer = event->data;
     ucscf = peer->conf;
 
+    //此处为重新定时调用，意为定向判断后端是否要用，如果当前进程正在处理则继续进入定时调用，否则做检测处理
     ngx_add_timer(event, ucscf->check_interval / 2);
 
     /* This process is processing this peer now. */
@@ -2622,14 +2631,14 @@ ngx_http_upstream_check_connect_handler(ngx_event_t *event)
 upstream_check_connect_done:
     peer->state = NGX_HTTP_CHECK_CONNECT_DONE;
 
-    c->write->handler = peer->send_handler;
-    c->read->handler = peer->recv_handler;
+    c->write->handler = peer->send_handler; //向后端发送测试请求
+    c->read->handler = peer->recv_handler; //接收后端的测试响应
 
-    ngx_add_timer(&peer->check_timeout_ev, ucscf->check_timeout);
+    ngx_add_timer(&peer->check_timeout_ev, ucscf->check_timeout); //做超时处理
 
     /* The kqueue's loop interface needs it. */
     if (rc == NGX_OK) {
-        c->write->handler(c->write);
+        c->write->handler(c->write);//向后端发起测试请求，同时ngx_process_events_and_timer将epoll_wait唤起处理并调用接收的测试回调c->read->handler
     }
 }
 
@@ -5749,7 +5758,9 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
                    peer_shm->socklen);
 
         peer_shm->upstream_name = ngx_str_2_hash( peer[i].upstream_name ) ;
-
+        if(peer[i].peer_mem_addr != NULL) {
+        	peer_shm->server_name = ngx_str_2_hash( &peer[i].peer_mem_addr->server ) ;
+        }
         /*if (vars_hash_conf.count > 0){
         	ngx_uint_t i;
         	for(i=0;i<vars_hash_conf.count;i++){
@@ -5760,8 +5771,11 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
 
         if (opeers_shm) {
 
-            opeer_shm = ngx_http_upstream_check_find_shm_peer(opeers_shm,
-                                                              peer[i].peer_addr , peer[i].upstream_name);
+            opeer_shm = ngx_http_upstream_check_find_shm_peer(opeers_shm, peer[i].peer_addr , peer[i].upstream_name);
+            if ( opeer_shm == NULL && peer[i].peer_mem_addr != NULL) {
+            	opeer_shm = ngx_http_upstream_check_find_shm_peer_by_server_name(opeers_shm, &peer[i].peer_mem_addr->server , peer[i].upstream_name);
+            }
+
             if (opeer_shm) {
                 ngx_log_debug1(NGX_LOG_DEBUG_HTTP, shm_zone->shm.log, 0,
                                "http upstream check, inherit opeer: %V ",
@@ -5898,15 +5912,11 @@ ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *p, ng
     ngx_http_upstream_check_peer_shm_t *peer_shm;
 
     for (i = 0; i < p->number; i++) {
-
         peer_shm = &p->peers[i];
-
         if (addr->socklen != peer_shm->socklen) {
             continue;
         }
-        if (ngx_str_2_hash(upname) == peer_shm->upstream_name
-        		&& ngx_memcmp(addr->sockaddr, peer_shm->sockaddr, addr->socklen) == 0) {
-
+        if (ngx_str_2_hash(upname) == peer_shm->upstream_name && ngx_memcmp(addr->sockaddr, peer_shm->sockaddr, addr->socklen) == 0) {
             return peer_shm;
         }
     }
@@ -5914,6 +5924,21 @@ ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *p, ng
     return NULL;
 }
 
+static ngx_http_upstream_check_peer_shm_t *
+ngx_http_upstream_check_find_shm_peer_by_server_name(ngx_http_upstream_check_peers_shm_t *p, ngx_str_t *server ,ngx_str_t *upname)
+{
+    ngx_uint_t                          i;
+    ngx_http_upstream_check_peer_shm_t *peer_shm;
+
+    for (i = 0; i < p->number; i++) {
+        peer_shm = &p->peers[i];
+        if (ngx_str_2_hash(upname) == peer_shm->upstream_name && ngx_str_2_hash(server) == peer_shm->server_name) {
+            return peer_shm;
+        }
+    }
+
+    return NULL;
+}
 
 static ngx_int_t
 ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
@@ -5938,6 +5963,7 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
         psh->v_weight = opsh->v_weight;
         psh->v_total_weight = opsh->v_total_weight;
         psh->upstream_name = opsh->upstream_name;
+        psh->server_name = opsh->server_name;
 
     } else {
         psh->access_time  = 0;

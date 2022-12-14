@@ -192,3 +192,6 @@ http://localhost:8100/router/[name]/exist/[key]
 #得到指定路由规则，键对应的分区,key可以与通配符记录做匹配
 http://localhost:8100/router/[name]/get/[key]
 
+七.刷新域名缓存
+#domain是要刷新的域名。当dns有更改后，nginx需要reload，这个api会自动刷新，前提是必须upsteam中使用xfdf_ip_hash。
+/domain/resolve/[domain]

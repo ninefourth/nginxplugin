@@ -46,5 +46,6 @@ ngx_int_t ngx_get_router_variable_region(ngx_str_t *router_name , ngx_str_t *var
 ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc,ngx_str_t *val);
 ngx_buf_t *ngx_list_router_var(ngx_pool_t *pool, ngx_str_t *router_name );
 
+
 #endif //_NGX_HTTP_UPSTREAM_CHECK_MODELE_H_INCLUDED_
 

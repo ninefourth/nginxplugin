@@ -1,4 +1,5 @@
 #include "ngx_common_util.h"
+#include <ngx_channel.h>
 
 static ngx_str_t http_head=ngx_string("http_");
 static ngx_str_t http_param=ngx_string("arg_");
@@ -35,10 +36,19 @@ ngx_int_t ngx_str_sch_last_trimtoken(u_char *s , size_t len, u_char c , ngx_str_
 {
 	u_char begin = 0, found=0;
 	u_char tmp_c;
+	ngx_str_t	l,r;
 	//
 	if(c == '\t') {
 		c = ' ';
 	}
+	//
+	if(left == NULL) {
+		left = &l;
+	}
+	if(right == NULL ) {
+		right = &r;
+	}
+	//
 	left->data = right->data = s;
 	left->len = len;
 	right->len = 0;
@@ -509,6 +519,90 @@ ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr)
 	return saddr;
 }
 
+ngx_int_t
+ngx_create_socketpair(ngx_socket_t *st, ngx_int_t protol ,ngx_log_t *log)
+{
+	u_long     on;
+	if (socketpair(AF_UNIX, SOCK_STREAM, protol, st) == -1) {
+		ngx_log_error(NGX_LOG_ERR, log, 0,"get master cmd channel error");
+		return NGX_ERROR;
+	}
+	if (ngx_nonblocking(st[0]) == -1) {
+		ngx_log_error(NGX_LOG_ERR, log, 0,"nonblocking master cmd channel[0] error");
+		ngx_close_channel(st, log);
+		return NGX_ERROR;
+	}
+
+	if (ngx_nonblocking(st[1]) == -1) {
+		ngx_log_error(NGX_LOG_ERR, log, 0,ngx_nonblocking_n "nonblocking master cmd channel[1] error");
+		ngx_close_channel(st, log);
+		return NGX_ERROR;
+	}
+
+	on = 1;
+	if (ioctl(st[0], FIOASYNC, &on) == -1) {
+		ngx_log_error(NGX_LOG_ERR, log, 0,"ioctl master cmd channel[0] error");
+		ngx_close_channel(st, log);
+		return NGX_ERROR;
+	}
+
+	if (fcntl(st[0], F_SETOWN, ngx_pid) == -1) {
+		ngx_log_error(NGX_LOG_ERR, log, 0,"fcntl master cmd channel[0] error");
+		ngx_close_channel(st, log);
+		return NGX_ERROR;
+	}
+
+	if (fcntl(st[0], F_SETFD, FD_CLOEXEC) == -1) {
+		ngx_log_error(NGX_LOG_ERR, log, 0,"fcntl master cmd channel[0] error ");
+		ngx_close_channel(st, log);
+		return NGX_ERROR;
+	}
+
+	if (fcntl(st[1], F_SETFD, FD_CLOEXEC) == -1) {
+		ngx_log_error(NGX_LOG_ERR, log, 0,"fcntl master cmd channel[1] error");
+		ngx_close_channel(st, log);
+		return NGX_ERROR;
+	}
+
+	return NGX_OK;
+}
+
+u_char *ngx_sockaddr_2_str(ngx_pool_t *pool ,struct sockaddr *addr, ngx_str_t *port ,ngx_str_t *str_addr)
+{
+	u_char *s_p, s_tmp[4];
+	size_t s_p_l = 0;
+	u_char *buf = NULL , *buf_st ;
+	if (port == NULL) {
+		ngx_uint_t pt;
+		pt = (u_char)addr->sa_data[0];
+		pt = pt << 8;
+		pt |= (u_char)addr->sa_data[1];
+		s_p = ngx_palloc(pool,sizeof(char)*8);
+		ngx_memzero(s_p,strlen((char*)s_p));
+		sprintf((char*)s_p,"%lu",pt);
+		s_p_l = strlen((char*)s_p);
+	} else {
+		s_p = port->data;
+		s_p_l = port->len;
+	}
+	str_addr->len = 15+1+s_p_l;// ip:port
+	buf_st = buf = ngx_palloc(pool, str_addr->len+1);
+	ngx_memzero(buf,str_addr->len+1);
+	for (size_t i = 2 ; i < 6 ; i++ ){
+		ngx_memzero(s_tmp,strlen((char*)s_tmp));
+		sprintf((char*)s_tmp,"%d",(u_char)addr->sa_data[i]);
+		buf = ngx_strcat(buf ,s_tmp ,strlen((char*)s_tmp));
+		if(i == 5 ) {
+			buf = ngx_strcat(buf , (u_char*)":" ,1);
+		} else {
+			buf = ngx_strcat(buf , (u_char*)"." ,1);
+		}
+	}
+	buf = ngx_strcat(buf , s_p ,s_p_l);
+	str_addr->data = buf_st;
+	str_addr->len = strlen((char*)buf_st);
+	return buf_st;
+}
 
 ngx_int_t ngx_math_log2(ngx_int_t x)
 {
@@ -577,7 +671,7 @@ ngx_char2uint(u_char* value,size_t len)
 }
 
 ngx_array_t *
-ngx_http_endpoint_parse_path(ngx_pool_t *pool, ngx_str_t *path)
+ngx_parse_path(ngx_pool_t *pool, ngx_str_t *path)
 {
     u_char       *p, *last, *end;
     ngx_str_t    *str;
@@ -606,7 +700,6 @@ ngx_http_endpoint_parse_path(ngx_pool_t *pool, ngx_str_t *path)
         } else {
             str->data = p;
             str->len = last - p;
-
         }
 
         p += str->len + 1;
@@ -848,3 +941,14 @@ ngx_binary_tree_node_t *ngx_binary_tree_remove_node(ngx_binary_tree_node_t *root
 }
 */
 /** **/
+
+//share memory
+ngx_shm_zone_t *
+ngx_shm_zone_init(ngx_conf_t *cf, ngx_module_t *module ,ngx_str_t *name, size_t size, void *data,ngx_shm_zone_init_pt shm_zone_init)
+{
+	ngx_shm_zone_t                       *shm_zone;
+	shm_zone = ngx_shared_memory_add(cf, name, size, &module); //初始预分配共享空间
+	shm_zone->data = data; //初始化空间时传入的数据
+	shm_zone->init = shm_zone_init; //初始化空间
+	return shm_zone;
+}

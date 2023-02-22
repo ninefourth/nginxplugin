@@ -31,6 +31,10 @@ xfdf_ip_hash指令只有一个参数：
 #include "ngx_http_upstream_check_module.h"
 #endif
 
+#if(NGX_HTTP_REQUEST_LOG)
+#include "ngx_http_request_log_module.h"
+#endif
+
 extern ngx_module_t  ngx_http_rewrite_module;
 
 //客户端peer的数据
@@ -38,7 +42,7 @@ typedef struct {
     /* the round robin data must be first */
     ngx_http_upstream_rr_peer_data_t   rrp; //server数据
     ngx_uint_t                        region; //客户端请求将会负载到的region
-
+    ngx_msec_int_t						tm;
     ngx_uint_t                         hash; //根据ip计算的哈希值
 
     u_char                             addrlen; //ip地址长度
@@ -80,6 +84,7 @@ typedef struct {
     /* the round robin data must be first */
     ngx_http_upstream_rr_peer_data_t    rrp;
     ngx_uint_t                        region;
+    ngx_msec_int_t						tm;
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *conf;
     ngx_str_t                           key;
     ngx_uint_t                          tries;
@@ -95,6 +100,7 @@ typedef struct {
 typedef struct {
 	ngx_http_upstream_rr_peer_data_t  rrp;
 	ngx_uint_t                    region;
+	ngx_msec_int_t					tm;
 } ngx_http_upstream_rr_ex_peer_data_t ;
 
 static ngx_int_t ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
@@ -233,6 +239,12 @@ ngx_http_get_variable_by_name(ngx_conf_t *cf, ngx_str_t *name)
     }
 
     return NULL;
+}
+
+static ngx_uint_t
+ngx_http_request_log_get_reqid(ngx_http_request_t *r)
+{
+	return (ngx_uint_t)r + r->start_sec*1000 + r->start_msec;
 }
 
 static u_char*
@@ -559,6 +571,8 @@ ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
         return NGX_ERROR;
     }
     
+    iphp->tm = ngx_http_request_log_get_reqid(r);
+
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf_t  *xfdfcf;
     ngx_http_upstream_xfdf_ip_hash_create_loc_conf_t		*xfdflcf;
 
@@ -795,6 +809,11 @@ ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc, void *data)
     iphp->rrp.tried[n] |= m;
     iphp->hash = hash;
 
+#ifdef NGX_HTTP_REQUEST_LOG
+	ngx_http_request_log_write_server(iphp->tm,pc->name->data,pc->name->len);
+#endif
+
+
     return NGX_OK;
 }
 
@@ -815,7 +834,7 @@ ngx_http_upstream_init_hash_peer(ngx_http_request_t *r,
     if (hp == NULL) {
         return NGX_ERROR;
     }
-
+    hp->tm = ngx_http_request_log_get_reqid(r);
     r->upstream->peer.data = &hp->rrp;
 
     if (ngx_http_upstream_init_round_robin_peer(r, us) != NGX_OK) {
@@ -998,6 +1017,10 @@ ngx_http_upstream_get_hash_peer(ngx_peer_connection_t *pc, void *data)
     ngx_http_upstream_rr_peers_unlock(hp->rrp.peers);
 
     hp->rrp.tried[n] |= m;
+
+#ifdef NGX_HTTP_REQUEST_LOG
+	ngx_http_request_log_write_server(hp->tm,pc->name->data,pc->name->len);
+#endif
 
     return NGX_OK;
 }
@@ -1209,6 +1232,7 @@ ngx_http_upstream_init_chash_peer(ngx_http_request_t *r,
     r->upstream->peer.get = ngx_http_upstream_get_chash_peer;
 
     hp = r->upstream->peer.data;
+    hp->tm = ngx_http_request_log_get_reqid(r);
     xfdfcf = ngx_http_conf_upstream_srv_conf(us, ngx_http_upstream_xfdf_ip_hash_module);
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, r->connection->log, 0, "xfdf - the real upstream hash key : \"%V\"",&(hp->key));
@@ -1372,6 +1396,10 @@ found:
 
     hp->rrp.tried[n] |= m;
 
+#ifdef NGX_HTTP_REQUEST_LOG
+	ngx_http_request_log_write_server(hp->tm,pc->name->data,pc->name->len);
+#endif
+
     return NGX_OK;
 }
 
@@ -1422,7 +1450,7 @@ ngx_http_upstream_init_rr_peer(ngx_http_request_t *r,
 	if (exrrp == NULL) {
 		return NGX_ERROR;
 	}
-
+	exrrp->tm = ngx_http_request_log_get_reqid(r);
     r->upstream->peer.data = &exrrp->rrp;
 
     if (ngx_http_upstream_init_round_robin_peer(r, us) != NGX_OK) {
@@ -1614,6 +1642,10 @@ ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc, void *data)
 	peer->conns++;
 
 	ngx_http_upstream_rr_peers_unlock(peers);
+
+#ifdef NGX_HTTP_REQUEST_LOG
+	ngx_http_request_log_write_server(exrrp->tm,pc->name->data,pc->name->len);
+#endif
 
 	return NGX_OK;
 

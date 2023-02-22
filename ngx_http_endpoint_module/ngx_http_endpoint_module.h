@@ -6,6 +6,6 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
-
+void ngx_append(ngx_chain_t *p , ngx_chain_t *c);
 
 #endif

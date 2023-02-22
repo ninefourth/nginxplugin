@@ -8,6 +8,9 @@ static ngx_str_t http_body_param=ngx_string("body_");
 static ngx_str_t http_body=ngx_string("body");
 static ngx_str_t http_arg=ngx_string("arg");
 
+extern ngx_uint_t  ngx_pagesize;
+extern ngx_uint_t  ngx_pagesize_shift;
+
 ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c)
 {
 	ngx_uint_t i = 0 ,p1 = 0, p2 = 0 ,sz = 0 ,sp =1;
@@ -302,8 +305,23 @@ ngx_str_to_int(u_char *line, size_t n)
     return value;
 }
 
+u_char *ngx_int_to_str(ngx_pool_t* pool,ngx_int_t num)
+{
+	u_char *s ;
+	size_t len = ngx_num_bit_count(num);
+	s = ngx_palloc(pool,len+1);
+	s[len] = '\0';
+	ngx_int_to_str2(s, num);
+	return s;
+}
+
+void ngx_int_to_str2(u_char* desc,ngx_int_t num)
+{
+	sprintf((char*)desc, "%ld", num);
+}
+
 char*
-ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str)
+ngx_strcopy( ngx_pool_t *pool , ngx_str_t *str)
 {
     char *s;
     s=ngx_palloc(pool,str->len+1);
@@ -326,6 +344,22 @@ ngx_int_t ngx_str_cmp(ngx_str_t *v1 ,ngx_str_t *v2)
 	ngx_int_t ret;
 	ret = ngx_strncmp( v1->data, v2->data, ngx_min(v1->len,v2->len) );
 	return (ret == 0) ? (ngx_int_t)v1->len - (ngx_int_t)v2->len : ret ;
+}
+
+ngx_int_t ngx_str_cmp2(ngx_str_t *v1 ,char *v2)
+{
+	ngx_str_t s;
+	s.data = (u_char*)v2;
+	s.len = strlen(v2);
+	return ngx_str_cmp(v1,&s);
+}
+
+ngx_int_t ngx_str_cmp3(char *v1 ,char *v2)
+{
+	ngx_int_t l1 = strlen(v1) ,l2 = strlen(v2);
+	ngx_int_t ret;
+	ret = ngx_strncmp( v1, v2, ngx_min(l1,l2) );
+	return (ret == 0) ? l1 - l2 : ret ;
 }
 
 
@@ -573,7 +607,7 @@ u_char *ngx_sockaddr_2_str(ngx_pool_t *pool ,struct sockaddr *addr, ngx_str_t *p
 	size_t s_p_l = 0;
 	u_char *buf = NULL , *buf_st ;
 	if (port == NULL) {
-		ngx_uint_t pt;
+		ngx_uint_t pt;//端口号
 		pt = (u_char)addr->sa_data[0];
 		pt = pt << 8;
 		pt |= (u_char)addr->sa_data[1];
@@ -588,7 +622,8 @@ u_char *ngx_sockaddr_2_str(ngx_pool_t *pool ,struct sockaddr *addr, ngx_str_t *p
 	str_addr->len = 15+1+s_p_l;// ip:port
 	buf_st = buf = ngx_palloc(pool, str_addr->len+1);
 	ngx_memzero(buf,str_addr->len+1);
-	for (size_t i = 2 ; i < 6 ; i++ ){
+	size_t i;
+	for ( i = 2 ; i < 6 ; i++ ){//ip
 		ngx_memzero(s_tmp,strlen((char*)s_tmp));
 		sprintf((char*)s_tmp,"%d",(u_char)addr->sa_data[i]);
 		buf = ngx_strcat(buf ,s_tmp ,strlen((char*)s_tmp));
@@ -942,13 +977,62 @@ ngx_binary_tree_node_t *ngx_binary_tree_remove_node(ngx_binary_tree_node_t *root
 */
 /** **/
 
-//share memory
+////share memory
+//预估分配空间, 申请共享日志空间,数据空间在分配时，还需要将承载数据的结构体空间计算在内！
+size_t
+ngx_shm_estimate_size(size_t size)
+{
+	size_t esize,pages,n; //
+	// size/ngx_pagesize 预估数据部分需要多少页。
+	pages = (size >> ngx_pagesize_shift) + ((size % ngx_pagesize) ? 1 : 0) + 1; //+1是为了访问对齐计算挤掉一页，所以在预估情况下加1冗余
+	esize = pages * (ngx_pagesize + sizeof(ngx_slab_page_t)); //每页加上ngx_slab_page_t结构大小重新计算需要空间
+	n = ngx_pagesize_shift - 3; //pool->min_shift=3;
+	esize += sizeof(ngx_slab_pool_t) + n*(sizeof(ngx_slab_page_t) + sizeof(ngx_slab_stat_t)) ; //计算包含pool以及存储有效数据所需要结构体的大小，就是总共需要分配的空间
+	return esize;
+}
+
+//申请共享空间
 ngx_shm_zone_t *
 ngx_shm_zone_init(ngx_conf_t *cf, ngx_module_t *module ,ngx_str_t *name, size_t size, void *data,ngx_shm_zone_init_pt shm_zone_init)
 {
 	ngx_shm_zone_t                       *shm_zone;
-	shm_zone = ngx_shared_memory_add(cf, name, size, &module); //初始预分配共享空间
+	shm_zone = ngx_shared_memory_add(cf, name, size, module); //初始预分配共享空间
 	shm_zone->data = data; //初始化空间时传入的数据
 	shm_zone->init = shm_zone_init; //初始化空间
 	return shm_zone;
 }
+
+//查找已分配的共享空间
+ngx_shm_zone_t *
+ngx_shared_memory_find(ngx_cycle_t *cycle, ngx_str_t *name, void *tag)
+{
+    ngx_uint_t        i;
+    ngx_shm_zone_t   *shm_zone;
+    ngx_list_part_t  *part;
+
+    part = (ngx_list_part_t *) &(cycle->shared_memory.part);
+    shm_zone = part->elts;
+
+    for (i = 0; /* void */ ; i++) {
+        if (i >= part->nelts) {
+            if (part->next == NULL) {
+                break;
+            }
+            part = part->next;
+            shm_zone = part->elts;
+            i = 0;
+        }
+        if (name->len != shm_zone[i].shm.name.len) {
+            continue;
+        }
+        if (ngx_strncmp(name->data, shm_zone[i].shm.name.data, name->len) != 0){
+            continue;
+        }
+        if (tag != shm_zone[i].tag) {
+            continue;
+        }
+        return &shm_zone[i];
+    }
+    return NULL;
+}
+

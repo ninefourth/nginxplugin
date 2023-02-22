@@ -46,8 +46,8 @@ ngx_link_item_t *ngx_link_add_item(ngx_link_t *link ,ngx_link_item_t *data, ngx_
 ngx_link_item_t *ngx_link_find_item(ngx_link_t *link ,ngx_link_item_t *data , ngx_link_item_compare cb);
 /*  */
 
-/*string function*/
-//字符串转哈希系列
+/**string function*/
+////字符串转哈希系列
 ngx_uint_t ngx_chars_2_hash(u_char *s , size_t size);
 ngx_uint_t ngx_str_2_hash(ngx_str_t *s);
 ngx_uint_t ngx_str_2_hash2(ngx_str_t *s, ngx_uint_t factor);
@@ -55,11 +55,11 @@ ngx_uint_t ngx_chars_2_hash2(u_char *s , size_t size , ngx_uint_t factor);
 ngx_uint_t ngx_str_2_hash_evenly(u_char *s , size_t size);
 //字符串拷贝
 void cpy_chars(u_char *des , u_char *sor , size_t size);
-char *ngx_strcpy( ngx_pool_t *pool , ngx_str_t *str);
+char *ngx_strcopy( ngx_pool_t *pool , ngx_str_t *str);
 u_char *ngx_strcat(u_char* des , u_char* src , size_t len);
 //以指定字符串开头
 ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len);
-//token系列
+////token系列
 //根据指定字符计算token个数
 ngx_uint_t ngx_str_find_element_count(u_char *s ,size_t len , u_char c);
 //得到下一个token
@@ -74,8 +74,15 @@ ngx_int_t ngx_str_sch_last_trimtoken(u_char *s , size_t len, u_char c , ngx_str_
 ngx_int_t ngx_str_index_of(u_char *s , size_t len, u_char c ,ngx_uint_t begin);
 //字符串转数字
 ngx_int_t ngx_str_to_int(u_char *line, size_t n);
+ngx_uint_t ngx_char2uint(u_char* value,size_t len);
+//数字转字符串
+u_char *ngx_int_to_str(ngx_pool_t* pool,ngx_int_t num);
+u_char* ngx_uint2char(u_char* des,ngx_uint_t value,size_t len);
+void ngx_int_to_str2(u_char* desc,ngx_int_t num);
 //比较两个字符串
 ngx_int_t ngx_str_cmp(ngx_str_t *v1 ,ngx_str_t *v2);
+ngx_int_t ngx_str_cmp2(ngx_str_t *v1 ,char *v2);
+ngx_int_t ngx_str_cmp3(char *v1 ,char *v2);
 //得到以\n或\0结尾字符串的长度，用于统计从文件中读出的一行有多少字符
 ngx_uint_t read_line(u_char *buf);
 //将地址以/为分隔符转成字符串数组
@@ -85,7 +92,7 @@ ngx_buf_t *append_printf(ngx_pool_t* pool, ngx_str_t *s, ngx_uint_t rt);
 //创建缓冲并将多个字符串添加进来
 ngx_buf_t *more_append_printf(ngx_pool_t* pool, size_t size, ...);
 
-/*http request function*/
+/**http request function*/
 //get http url parameter
 ngx_str_t *ngx_http_get_param_value(ngx_http_request_t *r , u_char *param , ngx_uint_t len , ngx_str_t *value);
 //get http header
@@ -98,23 +105,22 @@ ngx_str_t *ngx_get_param_value(ngx_str_t *args , u_char *param , ngx_uint_t len 
 
 ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t *desc);
 
-//net
+////net
 ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr);//将ip转成字符串
 ngx_int_t ngx_create_socketpair(ngx_socket_t *st, ngx_int_t protol ,ngx_log_t *log);//创建socket pair,一个用于读一个用于写
 u_char *ngx_sockaddr_2_str(ngx_pool_t *pool ,struct sockaddr *addr, ngx_str_t *port ,ngx_str_t *str_addr); //将sockaddr转换为字符串地址
 
-//math
+////math
 ngx_int_t ngx_math_log2(ngx_int_t x); //以2为底的对数
 ngx_uint_t ngx_math_pow(ngx_uint_t x , ngx_uint_t y); //x的y次方
 ngx_uint_t termial(ngx_uint_t x); //阶加
 ngx_uint_t factorial(ngx_uint_t x); //阶乘
 size_t ngx_num_bit_count(ngx_int_t num);//判断给定整数num是几位数
 
-u_char* ngx_uint2char(u_char* des,ngx_uint_t value,size_t len);//数字转字符串
-ngx_uint_t ngx_char2uint(u_char* value,size_t len);//字符串转数字
-
-//file
+////file
 void ngx_append_line_file(ngx_str_t *cnf_file , ngx_str_t *line );//向指定文件尾添加一行
 
-//share memory
+////share memory
+size_t ngx_shm_estimate_size(size_t size);
 ngx_shm_zone_t *ngx_shm_zone_init(ngx_conf_t *cf, ngx_module_t *module ,ngx_str_t *name, size_t size, void *data,ngx_shm_zone_init_pt shm_zone_init);
+ngx_shm_zone_t *ngx_shared_memory_find(ngx_cycle_t *cycle, ngx_str_t *name, void *tag);

@@ -193,5 +193,24 @@ http://localhost:8100/router/[name]/exist/[key]
 http://localhost:8100/router/[name]/get/[key]
 
 七.刷新域名缓存
-#domain是要刷新的域名。当dns有更改后，nginx需要reload，这个api会自动刷新，前提是必须upsteam中使用xfdf_ip_hash。
+#domain是要刷新的域名。当dns有更改后，nginx需要reload，这个api会自动刷新。
 /domain/resolve/[domain]
+
+八.请求但未响应时的日志，在nginx.cnf中http配置 request_log on，用于查看长时间未响应的请求
+#启用日志功能
+http://localhost:8100/log/enable
+#关闭日志功能,关闭后清除日志
+http://localhost:8100/log/disable
+#将日志从缓存中输出到文件，每个进程一个文件,[filename]是输出的文件名，每个进程输出的文件名会有pid后缀
+http://localhost:8100/log/print?file=[filename]
+
+九.waf的重载(避免reload),在nginx.cnf的server配置 waf on [name]; [name]表示一组waf的名称，用于在重载时标识
+#每一项单独重载，[name]为配置的waf标识，[item]为需要重载的项（可被重载的项目在waf_rule_path的指定目录中,文件名即是项目名)
+http://localhost:8100/waf/reload/[name]/[item]
+#启用与停用waf
+http://localhost:8100/waf/enable/[name]
+http://localhost:8100/waf/disable/[name]
+#查看waf是否启用
+http://localhost:8100/waf/show/[name]
+
+

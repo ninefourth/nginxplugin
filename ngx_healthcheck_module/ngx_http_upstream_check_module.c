@@ -488,6 +488,7 @@ static void ngx_http_upstream_check_recv_handler(ngx_event_t *event);
 static void ngx_http_upstream_check_discard_handler(ngx_event_t *event);
 static void ngx_http_upstream_check_dummy_handler(ngx_event_t *event);
 
+void ngx_init_upstream_region(ngx_uint_t up_name_hash);
 static ngx_int_t ngx_http_upstream_check_http_init(
     ngx_http_upstream_check_peer_t *peer);
 static ngx_int_t ngx_http_upstream_check_http_parse(
@@ -609,8 +610,7 @@ static char *ngx_http_upstream_check_init_shm(ngx_conf_t *cf, void *conf);
 
 static ngx_int_t ngx_http_upstream_check_get_shm_name(ngx_str_t *shm_name,
     ngx_pool_t *pool, ngx_uint_t generation);
-static ngx_shm_zone_t *ngx_shared_memory_find(ngx_cycle_t *cycle,
-    ngx_str_t *name, void *tag);
+
 static ngx_http_upstream_check_peer_shm_t *
 ngx_http_upstream_check_find_shm_peer(ngx_http_upstream_check_peers_shm_t *peers_shm,ngx_addr_t *addr ,ngx_str_t *upname);
 static ngx_http_upstream_check_peer_shm_t *
@@ -927,7 +927,8 @@ static ngx_http_upstream_check_loc_confs_t loc_cnfs;
 static ngx_str_t one=ngx_string("1");
 static ngx_str_t zero=ngx_string("0");
 //static ngx_conf_t *check_conf = NULL ;
-
+static ngx_slab_pool_t *shpool = NULL;
+static ngx_http_upstream_check_peers_shm_t *peers_shm_shpool = NULL;
 static ngx_str_t http_split=ngx_string("split_");
 
 static ngx_http_variable_t  ngx_http_custom_var_default = {
@@ -1700,7 +1701,8 @@ loop:
 		if (ngx_str_sch_idx_trimtoken(tpl,strlen((char*)tpl),' ',col_idx,&tpl_sp_token) == NGX_FALSE) return NGX_FALSE;
 		sz_tpl = ngx_str_find_element_count(tpl_sp_token.data, tpl_sp_token.len ,'*');
 		if(sz_tpl <= 0) {
-			if (tpl_sp_token.len == desc->len && ngx_strncasecmp(desc->data, tpl_sp_token.data, desc->len) == 0 ) {//匹配
+			if ( (tpl_sp_token.len == desc->len && ngx_strncasecmp(desc->data, tpl_sp_token.data, desc->len) == 0) ||
+					(*tpl_sp_token.data == '*') ) {//匹配
 				idx_scope += p;//记录索引
 			}
 			continue;
@@ -5025,7 +5027,7 @@ ngx_http_upstream_region(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     ucscf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_upstream_check_module);
 
     urcf = &up_region_cnfs.up_region_cnf[up_region_cnfs.count++];
-    urcf->conf.data = (u_char*)ngx_strcpy(cf->pool,&value[1]);
+    urcf->conf.data = (u_char*)ngx_strcopy(cf->pool,&value[1]);
     urcf->conf.len = strlen((char*)urcf->conf.data);
     urcf->upstream_hash = ngx_str_2_hash(&ucscf->type_name) ;
     return NGX_CONF_OK;
@@ -5061,7 +5063,7 @@ ngx_http_location_router(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     uclcf->conf.data = ngx_pcalloc(cf->pool, 256);
     uclcf->conf.len = 0;
     if(cf->args->nelts ==3){
-//    	uclcf->conf.data = (u_char*)ngx_strcpy(cf->pool,&value[2]);
+//    	uclcf->conf.data = (u_char*)ngx_strcopy(cf->pool,&value[2]);
     	cpy_chars(uclcf->conf.data , value[2].data ,value[2].len );
     	uclcf->conf.len = value[2].len;
     }
@@ -5589,6 +5591,7 @@ ngx_http_upstream_check_init_shm(ngx_conf_t *cf, void *conf)
     ngx_uint_t                            shm_size;
     ngx_shm_zone_t                       *shm_zone;
     ngx_http_upstream_check_main_conf_t  *ucmcf = conf;
+    ngx_http_upstream_check_peer_t      *peer;
 
     if (ucmcf->peers->peers.nelts > 0) {
 
@@ -5600,13 +5603,20 @@ ngx_http_upstream_check_init_shm(ngx_conf_t *cf, void *conf)
                                     ngx_http_upstream_check_shm_generation);
 
         /* The default check shared memory size is 5M */
-        shm_size = 5 * 1024 * 1024;
+        /*shm_size = 5 * 1024 * 1024;
 
         shm_size = shm_size < ucmcf->shm_size ?
-                              ucmcf->shm_size : shm_size;
+                              ucmcf->shm_size : shm_size;*/
 
-        shm_zone = ngx_shared_memory_add(cf, shm_name, shm_size,
-                                         &ngx_http_upstream_check_module);
+        shm_size = sizeof(ngx_http_upstream_check_peers_shm_t) + (ucmcf->peers->peers.nelts - 1) * sizeof(ngx_http_upstream_check_peer_shm_t);
+        shm_size = ngx_shm_estimate_size(shm_size);
+        peer = ucmcf->peers->peers.elts;
+        for (size_t i = 0; i < ucmcf->peers->peers.nelts; i++) {
+        	shm_size += ngx_shm_estimate_size(peer[i].peer_addr->socklen);
+        }
+        shm_size = ngx_max(shm_size,ucmcf->shm_size);
+
+        shm_zone = ngx_shared_memory_add(cf, shm_name, shm_size, &ngx_http_upstream_check_module);
 
         ngx_log_debug2(NGX_LOG_DEBUG_HTTP, cf->log, 0,
                        "http upstream check, upsteam:%V, shm_zone size:%ui",
@@ -5653,14 +5663,15 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
     ngx_int_t                            rc;
     ngx_uint_t                           i, same, number;
     ngx_pool_t                          *pool;
-    ngx_shm_zone_t                      *oshm_zone;
-    ngx_slab_pool_t                     *shpool;
+    ngx_shm_zone_t                      *oshm_zone = NULL;
     ngx_http_upstream_check_peer_t      *peer;
     ngx_http_upstream_check_peers_t     *peers;
     ngx_http_upstream_check_srv_conf_t  *ucscf;
     ngx_http_upstream_check_peer_shm_t  *peer_shm, *opeer_shm;
     ngx_http_upstream_check_peers_shm_t *peers_shm, *opeers_shm;
+    ngx_slab_pool_t *oshpool ;
 
+    oshpool = shpool;
     opeers_shm = NULL;
     peers_shm = NULL;
     ngx_str_null(&oshm_name);
@@ -5686,9 +5697,7 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
     if (data) {
         opeers_shm = data;
 
-        if ((opeers_shm->number == number)
-            && (opeers_shm->checksum == peers->checksum)) {
-
+        if ((opeers_shm->number == number) && (opeers_shm->checksum == peers->checksum)) {
             peers_shm = data;
             same = 1;
         }
@@ -5702,9 +5711,7 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
                     pool, ngx_http_upstream_check_shm_generation - 1);
 
             /* The global variable ngx_cycle still points to the old one */
-            oshm_zone = ngx_shared_memory_find((ngx_cycle_t *) ngx_cycle,
-                                               &oshm_name,
-                                               &ngx_http_upstream_check_module);
+            oshm_zone = ngx_shared_memory_find((ngx_cycle_t *) ngx_cycle, &oshm_name, &ngx_http_upstream_check_module);
 
             if (oshm_zone) {
                 opeers_shm = oshm_zone->data;
@@ -5716,8 +5723,7 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
             }
         }
 
-        size = sizeof(*peers_shm) +
-               (number - 1) * sizeof(ngx_http_upstream_check_peer_shm_t);
+        size = sizeof(*peers_shm) + (number - 1) * sizeof(ngx_http_upstream_check_peer_shm_t);
 
         peers_shm = ngx_slab_alloc(shpool, size);
 
@@ -5853,6 +5859,10 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
 		}
 	}
 
+	if(oshpool != NULL && peers_shm_shpool != NULL){
+		ngx_slab_free(oshpool,oshm_zone);
+		peers_shm_shpool = peers_shm;
+	}
 
     return NGX_OK;
 
@@ -5861,47 +5871,6 @@ failure:
                   "http upstream shm_size is too small, "
                   "you should specify a larger size. should more than %l ; will need %l", size, size - shm_zone->shm.size);
     return NGX_ERROR;
-}
-
-
-static ngx_shm_zone_t *
-ngx_shared_memory_find(ngx_cycle_t *cycle, ngx_str_t *name, void *tag)
-{
-    ngx_uint_t        i;
-    ngx_shm_zone_t   *shm_zone;
-    ngx_list_part_t  *part;
-
-    part = (ngx_list_part_t *) &(cycle->shared_memory.part);
-    shm_zone = part->elts;
-
-    for (i = 0; /* void */ ; i++) {
-
-        if (i >= part->nelts) {
-            if (part->next == NULL) {
-                break;
-            }
-            part = part->next;
-            shm_zone = part->elts;
-            i = 0;
-        }
-
-        if (name->len != shm_zone[i].shm.name.len) {
-            continue;
-        }
-
-        if (ngx_strncmp(name->data, shm_zone[i].shm.name.data, name->len) != 0)
-        {
-            continue;
-        }
-
-        if (tag != shm_zone[i].tag) {
-            continue;
-        }
-
-        return &shm_zone[i];
-    }
-
-    return NULL;
 }
 
 

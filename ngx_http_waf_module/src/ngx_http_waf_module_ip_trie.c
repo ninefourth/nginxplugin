@@ -254,6 +254,14 @@ ngx_int_t ip_trie_clear(ip_trie_t* trie) {
 	return NGX_HTTP_WAF_SUCCESS;
 }
 
+ngx_int_t ip_trie_clear_with_lock(ip_trie_t* trie, ngx_atomic_t *lock) {
+	ngx_int_t ret ;
+	ngx_rwlock_wlock(lock);
+	ret = ip_trie_clear(trie);
+	return ret;
+}
+
+
 
 // ngx_int_t ip_trie_delete(ip_trie_t* trie, inx_addr_t* inx_addr) {
 //     if (trie == NULL || inx_addr == NULL) {

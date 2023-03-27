@@ -63,13 +63,89 @@ char* ngx_http_waf_rule_path_conf(ngx_conf_t* cf, ngx_command_t* cmd, void* conf
     return NGX_CONF_OK;
 }
 
+//modified
+ngx_int_t ngx_http_waf_mode_reload(ngx_str_t* modes, size_t len, ngx_http_waf_loc_conf_t *loc_conf)
+{
+	size_t i;
+	ngx_uint_t m;
+	for (i = 0; i < len && modes != NULL; i++) {
+		#define ngx_http_waf_parse_mode(mode_str, not_mode_str, mode_bit) {                     \
+			if (ngx_strncasecmp(modes[i].data,                                                  \
+				(u_char*)(mode_str),                                                            \
+				ngx_min(modes[i].len, sizeof((mode_str)) - 1)) == 0                             \
+				&& modes[i].len == sizeof((mode_str)) - 1) {                                    \
+				loc_conf->waf_mode |= mode_bit;                                                 \
+				continue;                                                                       \
+			} else if (ngx_strncasecmp(modes[i].data,                                           \
+									  (u_char*)(not_mode_str),                                  \
+									  ngx_min(modes[i].len, sizeof((not_mode_str)) - 1)) == 0   \
+				&& modes[i].len == sizeof((not_mode_str)) - 1) {                                \
+				loc_conf->waf_mode &= ~mode_bit;                                                \
+				continue;                                                                       \
+			}                                                                                   \
+		}
 
+		ngx_http_waf_parse_mode("GET", "!GET", NGX_HTTP_WAF_MODE_INSPECT_GET);
+		ngx_http_waf_parse_mode("HEAD", "!HEAD", NGX_HTTP_WAF_MODE_INSPECT_HEAD);
+		ngx_http_waf_parse_mode("POST", "!POST", NGX_HTTP_WAF_MODE_INSPECT_POST);
+		ngx_http_waf_parse_mode("PUT", "!PUT", NGX_HTTP_WAF_MODE_INSPECT_PUT);
+		ngx_http_waf_parse_mode("DELETE", "!DELETE", NGX_HTTP_WAF_MODE_INSPECT_DELETE);
+		ngx_http_waf_parse_mode("MKCOL", "!MKCOL", NGX_HTTP_WAF_MODE_INSPECT_MKCOL);
+		ngx_http_waf_parse_mode("COPY", "!COPY", NGX_HTTP_WAF_MODE_INSPECT_COPY);
+		ngx_http_waf_parse_mode("MOVE", "!MOVE", NGX_HTTP_WAF_MODE_INSPECT_MOVE);
+		ngx_http_waf_parse_mode("OPTIONS", "!OPTIONS", NGX_HTTP_WAF_MODE_INSPECT_OPTIONS);
+		ngx_http_waf_parse_mode("PROPFIND", "!PROPFIND", NGX_HTTP_WAF_MODE_INSPECT_PROPFIND);
+		ngx_http_waf_parse_mode("PROPPATCH", "!PROPPATCH", NGX_HTTP_WAF_MODE_INSPECT_PROPPATCH);
+		ngx_http_waf_parse_mode("LOCK", "!LOCK", NGX_HTTP_WAF_MODE_INSPECT_LOCK);
+		ngx_http_waf_parse_mode("UNLOCK", "!UNLOCK", NGX_HTTP_WAF_MODE_INSPECT_UNLOCK);
+		ngx_http_waf_parse_mode("PATCH", "!PATCH", NGX_HTTP_WAF_MODE_INSPECT_PATCH);
+		ngx_http_waf_parse_mode("TRACE", "!TRACE", NGX_HTTP_WAF_MODE_INSPECT_TRACE);
+		ngx_http_waf_parse_mode("CMN-METH", "!CMN-METH", NGX_HTTP_WAF_MODE_CMN_METH);
+		ngx_http_waf_parse_mode("ALL-METH", "!ALL-METH", NGX_HTTP_WAF_MODE_ALL_METH);
+		ngx_http_waf_parse_mode("IP", "!IP", NGX_HTTP_WAF_MODE_INSPECT_IP);
+		ngx_http_waf_parse_mode("URL", "!URL", NGX_HTTP_WAF_MODE_INSPECT_URL);
+		ngx_http_waf_parse_mode("RBODY", "!RBODY", NGX_HTTP_WAF_MODE_INSPECT_RB);
+		ngx_http_waf_parse_mode("ARGS", "!ARGS", NGX_HTTP_WAF_MODE_INSPECT_ARGS);
+		ngx_http_waf_parse_mode("UA", "!UA", NGX_HTTP_WAF_MODE_INSPECT_UA);
+		ngx_http_waf_parse_mode("COOKIE", "!COOKIE", NGX_HTTP_WAF_MODE_INSPECT_COOKIE);
+		ngx_http_waf_parse_mode("REFERER", "!REFERER", NGX_HTTP_WAF_MODE_INSPECT_REFERER);
+		ngx_http_waf_parse_mode("CC", "!CC", NGX_HTTP_WAF_MODE_INSPECT_CC);
+		ngx_http_waf_parse_mode("ADV", "!ADV", NGX_HTTP_WAF_MODE_INSPECT_ADV);
+		ngx_http_waf_parse_mode("STD", "!STD", NGX_HTTP_WAF_MODE_STD);
+		ngx_http_waf_parse_mode("STATIC", "!STATIC", NGX_HTTP_WAF_MODE_STATIC);
+		ngx_http_waf_parse_mode("DYNAMIC", "!DYNAMIC", NGX_HTTP_WAF_MODE_DYNAMIC);
+		ngx_http_waf_parse_mode("FULL", "!FULL", NGX_HTTP_WAF_MODE_FULL);
+		ngx_http_waf_parse_mode("CACHE", "!CACHE", NGX_HTTP_WAF_MODE_EXTRA_CACHE);
+		ngx_http_waf_parse_mode("LIB-INJECTION", "!LIB-INJECTION", NGX_HTTP_WAF_MODE_LIB_INJECTION);
+		ngx_http_waf_parse_mode("LIB-INJECTION-SQLI", "!LIB-INJECTION-SQLI", NGX_HTTP_WAF_MODE_LIB_INJECTION_SQLI);
+		ngx_http_waf_parse_mode("LIB-INJECTION-XSS", "!LIB-INJECTION-XSS", NGX_HTTP_WAF_MODE_LIB_INJECTION_XSS);
+
+		#undef ngx_http_waf_parse_mode
+
+		return NGX_ERROR;
+	}
+
+	m = loc_conf->waf_mode;
+	for(; (loc_conf = loc_conf->parent); ) {
+		loc_conf->waf_mode = m;
+	}
+
+	return NGX_OK;
+}
+
+//modified
 char* ngx_http_waf_mode_conf(ngx_conf_t* cf, ngx_command_t* cmd, void* conf) {
     ngx_http_waf_loc_conf_t* loc_conf = (ngx_http_waf_loc_conf_t*)conf;
     ngx_str_t* modes = cf->args->elts;
-    size_t i;
 
+    if( ngx_http_waf_mode_reload(++modes, cf->args->nelts-1,loc_conf) == NGX_ERROR ) {
+    	ngx_conf_log_error(NGX_LOG_EMERG, cf, NGX_EINVAL,
+			"ngx_waf: invalid value. Please visit https://docs.addesp.com/ngx_waf/advance/syntax.html or https://add-sp.github.io/ngx_waf/advance/syntax.html or https://ngx-waf.pages.dev/advance/syntax.html");
+		return NGX_CONF_ERROR;
+    }
 
+    return NGX_CONF_OK;
+    /*
     for (i = 1; i < cf->args->nelts && modes != NULL; i++) {
         #define ngx_http_waf_parse_mode(mode_str, not_mode_str, mode_bit) {                     \
             if (ngx_strncasecmp(modes[i].data,                                                  \
@@ -129,7 +205,7 @@ char* ngx_http_waf_mode_conf(ngx_conf_t* cf, ngx_command_t* cmd, void* conf) {
         return NGX_CONF_ERROR;
     }
 
-    return NGX_CONF_OK;
+    return NGX_CONF_OK;*/
 }
 
 
@@ -801,6 +877,12 @@ ngx_int_t ngx_http_waf_shm_zone_cc_deny_init(ngx_shm_zone_t *zone, void *data) {
 }
 
 
+static void * ngx_libc_cdecl
+ngx_waf_rx_malloc(size_t size)
+{
+    return malloc(size);
+}
+
 ngx_int_t load_into_container(ngx_conf_t* cf, const char* file_name, void* container, ngx_int_t mode) {
     FILE* fp = fopen(file_name, "r");
     ngx_int_t line_number = 0;
@@ -817,6 +899,9 @@ ngx_int_t load_into_container(ngx_conf_t* cf, const char* file_name, void* conta
         }
         // print_code(container);
     } else {
+    	void *pmc = pcre_malloc;
+//    	size_t pp = 0;
+    	pcre_malloc = ngx_waf_rx_malloc; //重载pcre的申请空间方法，使用后要还原
         while (fgets(str, NGX_HTTP_WAF_RULE_MAX_LEN - 16, fp) != NULL) {
             ngx_regex_compile_t   regex_compile;
             u_char                errstr[NGX_MAX_CONF_ERRSTR];
@@ -876,17 +961,28 @@ ngx_int_t load_into_container(ngx_conf_t* cf, const char* file_name, void* conta
                     ngx_http_waf_to_c_str((u_char*)temp, line);
                     ngx_conf_log_error(NGX_LOG_ERR, (cf), 0, 
                         "ngx_waf: In %s:%d, [%s] is not a valid regex string.", file_name, line_number, temp);
+                    pcre_malloc = pmc;
                     return NGX_HTTP_WAF_FAIL;
                 }
+//if(((ngx_array_t*)container)->nelts > pp ){
+//ngx_log_error(NGX_LOG_ALERT, ngx_cycle->log, 0, "--------------------------");
+//ngx_regex_elt = &((ngx_regex_elt_t*)(((ngx_array_t*)container)->elts))[pp++];
+////ngx_waf_free(ngx_regex_elt->regex->code);
+//ngx_regex_elt->regex = regex_compile.regex;
+//ngx_regex_elt->regex->extra = pcre_study(regex_compile.regex->code, regex_compile.options, (const char**)&errstr);
+//}
+//else{pp++;
                 ngx_regex_elt = ngx_array_push((ngx_array_t*)container);
                 ngx_regex_elt->name = ngx_palloc(cf->pool, sizeof(u_char) * NGX_HTTP_WAF_RULE_MAX_LEN);
                 ngx_http_waf_to_c_str(ngx_regex_elt->name, line);
                 ngx_regex_elt->regex = regex_compile.regex;
+//}
                 break;
             case 1:
                 if (ngx_http_waf_parse_ipv4(line, &ipv4) != NGX_HTTP_WAF_SUCCESS) {
                     ngx_conf_log_error(NGX_LOG_ERR, (cf), 0, 
                         "ngx_waf: In %s:%d, [%s] is not a valid IPV4 string.", file_name, line_number, ipv4.text);
+                    pcre_malloc = pmc;
                     return NGX_HTTP_WAF_FAIL;
                 }
                 inx_addr.ipv4.s_addr = ipv4.prefix;
@@ -899,6 +995,7 @@ ngx_int_t load_into_container(ngx_conf_t* cf, const char* file_name, void* conta
                         ngx_conf_log_error(NGX_LOG_ERR, (cf), 0, 
                             "ngx_waf: In %s:%d, [%s] cannot be stored because the memory allocation failed.", 
                             file_name, line_number, ipv4.text);
+                        	pcre_malloc = pmc;
                             return NGX_HTTP_WAF_FAIL;
                     }
                 }
@@ -908,6 +1005,7 @@ ngx_int_t load_into_container(ngx_conf_t* cf, const char* file_name, void* conta
                 if (ngx_http_waf_parse_ipv6(line, &ipv6) != NGX_HTTP_WAF_SUCCESS) {
                     ngx_conf_log_error(NGX_LOG_ERR, (cf), 0, 
                         "ngx_waf: In %s:%d, [%s] is not a valid IPV6 string.", file_name, line_number, ipv6.text);
+                    pcre_malloc = pmc;
                     return NGX_HTTP_WAF_FAIL;
                 }
                 ngx_memcpy(inx_addr.ipv6.s6_addr, ipv6.prefix, 16);
@@ -920,6 +1018,7 @@ ngx_int_t load_into_container(ngx_conf_t* cf, const char* file_name, void* conta
                         ngx_conf_log_error(NGX_LOG_ERR, (cf), 0, 
                             "ngx_waf: In %s:%d, [%s] cannot be stored because the memory allocation failed.", 
                             file_name, line_number, ipv6.text);
+                        pcre_malloc = pmc;
                             return NGX_HTTP_WAF_FAIL;
                     }
                 }
@@ -927,8 +1026,8 @@ ngx_int_t load_into_container(ngx_conf_t* cf, const char* file_name, void* conta
 #endif
             }
         }
+        pcre_malloc = pmc;
     }
-
     
     fclose(fp);
     ngx_pfree(cf->pool, str);
@@ -1061,7 +1160,7 @@ ngx_int_t ngx_http_waf_init_lru_cache(ngx_conf_t* cf, ngx_http_waf_loc_conf_t* c
     return NGX_HTTP_WAF_SUCCESS;
 }
 
-
+//modified
 ngx_int_t ngx_http_waf_load_all_rule(ngx_conf_t* cf, ngx_http_waf_loc_conf_t* conf, void *flag) {
     char* full_path = ngx_palloc(cf->pool, sizeof(char) * NGX_HTTP_WAF_RULE_MAX_LEN);
     char* end = ngx_http_waf_to_c_str((u_char*)full_path, conf->waf_rule_path);
@@ -1103,66 +1202,153 @@ ngx_int_t ngx_http_waf_load_all_rule(ngx_conf_t* cf, ngx_http_waf_loc_conf_t* co
     return NGX_HTTP_WAF_SUCCESS;
 }
 
-//modified
-void ngx_http_endpoint_waf_release_array(ngx_array_t *wc, lru_cache_t *cache)
+
+void ngx_http_waf_release_pcre(ngx_array_t *container)
 {
-	ngx_pfree(wc->pool,wc->elts);
-	wc->elts = ngx_palloc(wc->pool,wc->size*wc->nalloc);
-	if(cache != NULL) {
-		lru_cache_eliminate(cache,wc->nelts);
+	if(container != NULL && container->nelts > 0 ){
+		ngx_regex_elt_t *elts = container->elts;
+		ngx_regex_elt_t* elt;
+		size_t n = 0;
+		while( n < container->nelts) {
+			elt = &elts[n++];
+			if( elt->regex != NULL && elt->regex->code != NULL) {
+				ngx_pfree(container->pool,elt->name);
+				free(elt->regex->code);
+				pcre_free_study(elt->regex->extra);
+				ngx_pfree(container->pool,elt->regex);
+			}
+		}
 	}
-	wc->nelts = 0;
 }
 
-//重载waf modified
+void ngx_http_waf_study_pcre(ngx_array_t *container)
+{
+	if(container != NULL && container->nelts > 0 ){
+		ngx_regex_elt_t *elts = container->elts;
+		ngx_regex_elt_t* elt;
+		size_t n = 0;
+		void *pmc = pcre_malloc;
+		/** 重载pcre的申请空间方法，使用后要还原
+		 * 这所以要重载此方法，是因为 ngx_regex.c中重载的方法是使用 pool，没有释放，实际就是等pool生命期结束才释放，
+		 * 这样不能满足reload waf各项的需要，所以重载分配内存的方法，是为了可以手动控制释放(ngx_http_waf_release_pcre中释放)
+		 * */
+		pcre_malloc = ngx_waf_rx_malloc;
+		while( n < container->nelts) {
+			const char *errstr;
+			elt = &elts[n++];
+			if( elt->regex != NULL && elt->regex->code != NULL) {
+				elt->regex->extra = pcre_study(elt->regex->code, 0, &errstr);
+				if (errstr != NULL) {
+					ngx_log_error(NGX_LOG_ALERT, ngx_cycle->log, 0,errstr,elt->name);
+				}
+			}
+		}
+		pcre_malloc = pmc;
+	}
+}
+
+//modified
+void ngx_http_waf_release_array(ngx_array_t *wc, lru_cache_t *cache, ngx_atomic_t *lock)
+{
+	ngx_rwlock_wlock(lock);
+	ngx_http_waf_release_pcre(wc);
+	ngx_int_t l = wc->nelts;
+	wc->nelts = 0;
+	//不做真正的释放，因为还会重新分配，回收耗无意义性能也不好
+//	wc->size = sizeof(ngx_regex_elt_t);
+//	ngx_pfree(wc->pool,wc->elts);
+//	wc->elts = ngx_pcalloc(wc->pool,wc->size);
+//	wc->elts = ngx_palloc(wc->pool,wc->size*wc->nalloc);
+//	wc->nalloc = 1;
+	if(cache != NULL && l != 0) {
+		lru_cache_eliminate(cache,l);
+	}
+}
+
+/** 重载waf modified
+ * 1.释放原来的正则数据
+ * 2.释放或初始各项及缓存
+ * 3.重新加载各项
+ * 4.重新训练正则数据 */
 ngx_int_t
 ngx_http_waf_reload(ngx_conf_t *cnf , ngx_http_waf_loc_conf_t *wcf, void* item)
 {
 	if (wcf != NULL){
+		ngx_atomic_t *lock;
+		ngx_array_t	*ar = NULL;
 		if( ngx_str_cmp3(item,NGX_HTTP_WAF_IPV4_FILE) == 0 ) {
-			if (ip_trie_clear(wcf->black_ipv4) == NGX_HTTP_WAF_FAIL) goto err;
+			if (ip_trie_clear_with_lock(wcf->black_ipv4, (lock=&wcf->lock.black_ipv4) ) == NGX_HTTP_WAF_FAIL) goto err;
 		}
 #if (NGX_HAVE_INET6)
 		else if( ngx_str_cmp3(item,NGX_HTTP_WAF_IPV6_FILE) == 0 ) {
-			if (ip_trie_clear(wcf->black_ipv6) == NGX_HTTP_WAF_FAIL)  goto err;
+			if (ip_trie_clear_with_lock(wcf->black_ipv6, (lock=&wcf->lock.black_ipv6) ) == NGX_HTTP_WAF_FAIL)  goto err;
 		}
 #endif
 		else if( ngx_str_cmp3(item,NGX_HTTP_WAF_WHITE_IPV4_FILE) == 0 ) {
-			if (ip_trie_clear(wcf->white_ipv4) == NGX_HTTP_WAF_FAIL)  goto err;
+			if (ip_trie_clear_with_lock(wcf->white_ipv4, (lock=&wcf->lock.white_ipv4) ) == NGX_HTTP_WAF_FAIL)  goto err;
 		}
 #if (NGX_HAVE_INET6)
 		else if( ngx_str_cmp3(item,NGX_HTTP_WAF_WHITE_IPV6_FILE) == 0 ) {
-			if (ip_trie_clear(wcf->white_ipv6) == NGX_HTTP_WAF_FAIL)  goto err;
+			if (ip_trie_clear_with_lock(wcf->white_ipv6, (lock=&wcf->lock.white_ipv6) ) == NGX_HTTP_WAF_FAIL)  goto err;
 		}
 #endif
+		//释放原来的正则数据. 释放或初始各项及缓存
 		else if( ngx_str_cmp3(item,NGX_HTTP_WAF_URL_FILE) == 0 ) {
-			ngx_http_endpoint_waf_release_array(wcf->black_url,wcf->black_url_inspection_cache);
+			ngx_http_waf_release_array( (ar=wcf->black_url),wcf->black_url_inspection_cache, (lock=&wcf->lock.black_url) );
 		}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_ARGS_FILE) == 0 ) {
-			ngx_http_endpoint_waf_release_array(wcf->black_args,wcf->black_args_inspection_cache);
+			ngx_http_waf_release_array((ar=wcf->black_args),wcf->black_args_inspection_cache, (lock=&wcf->lock.black_args) );
 		}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_UA_FILE) == 0 ) {
-			ngx_http_endpoint_waf_release_array(wcf->black_ua,wcf->black_ua_inspection_cache);
+			ngx_http_waf_release_array((ar=wcf->black_ua),wcf->black_ua_inspection_cache, (lock=&wcf->lock.black_ua) );
 		}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_REFERER_FILE) == 0 ) {
-			ngx_http_endpoint_waf_release_array(wcf->black_referer,wcf->black_referer_inspection_cache);
+			ngx_http_waf_release_array((ar=wcf->black_referer),wcf->black_referer_inspection_cache, (lock=&wcf->lock.black_referer) );
 		}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_COOKIE_FILE) == 0 ) {
-			ngx_http_endpoint_waf_release_array(wcf->black_cookie,wcf->black_cookie_inspection_cache);
+			ngx_http_waf_release_array((ar=wcf->black_cookie),wcf->black_cookie_inspection_cache, (lock=&wcf->lock.black_cookie) );
 		}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_POST_FILE) == 0 ) {
-			ngx_http_endpoint_waf_release_array(wcf->black_post,NULL);
+			ngx_http_waf_release_array((ar=wcf->black_post),NULL, (lock=&wcf->lock.black_post) );
 		}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_WHITE_URL_FILE) == 0 ) {
-			ngx_http_endpoint_waf_release_array(wcf->white_url,wcf->white_url_inspection_cache);
+			ngx_http_waf_release_array((ar=wcf->white_url),wcf->white_url_inspection_cache, (lock=&wcf->lock.white_url) );
 		}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_WHITE_REFERER_FILE) == 0 ) {
-			ngx_http_endpoint_waf_release_array(wcf->white_referer,wcf->white_referer_inspection_cache);
+			ngx_http_waf_release_array((ar=wcf->white_referer),wcf->white_referer_inspection_cache, (lock=&wcf->lock.white_referer) );
 		}else {
 			return NGX_ABORT;
 		}
 		//
+		if(ar != NULL && cnf->pool == NULL) {
+			cnf->pool = ar->pool;
+		}
+		if(cnf->pool == NULL) {
+			cnf->pool = ngx_cycle->pool;
+		}
+
 		if(ngx_http_waf_load_all_rule(cnf, wcf, item) != NGX_HTTP_WAF_SUCCESS) {
 			ngx_log_error(NGX_LOG_ERR, cnf->log, 0, "waf: reload %s error ", (char*)item);
+			ngx_rwlock_unlock(lock);
 			return NGX_ERROR;
 		} else {
+			// 重新训练正则数据
+			if( ngx_str_cmp3(item,NGX_HTTP_WAF_URL_FILE) == 0 ) {
+				ngx_http_waf_study_pcre(wcf->black_url);
+			}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_ARGS_FILE) == 0 ) {
+				ngx_http_waf_study_pcre(wcf->black_args);
+			}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_UA_FILE) == 0 ) {
+				ngx_http_waf_study_pcre(wcf->black_ua);
+			}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_REFERER_FILE) == 0 ) {
+				ngx_http_waf_study_pcre(wcf->black_referer);
+			}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_COOKIE_FILE) == 0 ) {
+				ngx_http_waf_study_pcre(wcf->black_cookie);
+			}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_POST_FILE) == 0 ) {
+				ngx_http_waf_study_pcre(wcf->black_post);
+			}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_WHITE_URL_FILE) == 0 ) {
+				ngx_http_waf_study_pcre(wcf->white_url);
+			}else if( ngx_str_cmp3(item,NGX_HTTP_WAF_WHITE_REFERER_FILE) == 0 ) {
+				ngx_http_waf_study_pcre(wcf->white_referer);
+			}
+			ngx_rwlock_unlock(lock);
 			goto tail;
 		}
 
 		err:
+			ngx_rwlock_unlock(lock);
 			ngx_log_error(NGX_LOG_ERR, cnf->log, 0, "waf: clear %s error ", (char*)item);
 			return NGX_ERROR;
 	}

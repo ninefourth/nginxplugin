@@ -197,7 +197,7 @@ static u_char ngx_http_upstream_ip_hash_pseudo_addr[3];//空的ip地址
 static ngx_str_t strxffd = ngx_string("x-forwarded-for");
 static ngx_str_t strremote = ngx_string("remote_addr");
 
-static ngx_http_upstream_xfdf_ups_t *xfdf_ups;
+static ngx_http_upstream_xfdf_ups_t *xfdf_ups = NULL;
 static ngx_str_t str_up=ngx_string("upstream ");
 static ngx_str_t str_sr=ngx_string(" server ");
 static ngx_str_t str_dn=ngx_string(" down=");
@@ -349,18 +349,18 @@ ngx_xfdf_init_upstream(ngx_pool_t *pool ,ngx_http_upstream_rr_peers_t* peers)
 }
 
 ngx_str_t*
-ngx_xfdf_list_upstreams()
+ngx_xfdf_list_upstreams(ngx_pool_t *pool)
 {
     ngx_str_t *str_ups;
     u_char *buf = NULL , *buf_st ;
     ngx_http_upstream_xfdf_up_t    *ups;
     size_t i ,j,len = 0 ;
 
-    if (xfdf_ups->upstreams == NULL ){
+    if (xfdf_ups == NULL || xfdf_ups->upstreams == NULL ){
         return NULL;
     }
 
-    str_ups = ngx_palloc(xfdf_ups->pool, sizeof(ngx_str_t));
+    str_ups = ngx_palloc(pool, sizeof(ngx_str_t));
     str_ups->len = 0;
     str_ups->data = NULL;
 
@@ -387,7 +387,7 @@ ngx_xfdf_list_upstreams()
     }
     if ( len > 0 ) {
 
-        buf_st = buf = ngx_palloc(xfdf_ups->pool, sizeof(u_char)*len );
+        buf_st = buf = ngx_palloc(pool, sizeof(u_char)*len );
     
         for (i=0; i<xfdf_ups->upstreams->nelts; i++){
             buf = ngx_strcat(buf ,str_up.data ,str_up.len );

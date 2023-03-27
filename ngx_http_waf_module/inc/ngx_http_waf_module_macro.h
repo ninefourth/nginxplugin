@@ -368,12 +368,16 @@
     strcat((folder), (filename));                                                                               \
     if (access((folder), R_OK) != 0) {                                                                          \
         ngx_conf_log_error(NGX_LOG_ERR, (cf), 0, "ngx_waf: %s: %s", (folder), "No such file or directory");     \
-        return NGX_HTTP_WAF_FAIL;                                                                                  \
-    }                                                                                                           \
-    if (load_into_container((cf), (folder), (container), (mode)) == NGX_HTTP_WAF_FAIL) {                                     \
-        ngx_conf_log_error(NGX_LOG_ERR, (cf), 0, "ngx_waf: %s: %s", (folder), "Cannot read configuration.");    \
-        return NGX_HTTP_WAF_FAIL;                                                                                  \
-    }                                                                                                           \
+        /*return NGX_HTTP_WAF_FAIL; modified当文件不存在依然可以继续执行和空文件一样,;*/                                \
+    } 																									\
+    else /*modified*/                                                                                                      \
+	{									\
+    	ngx_int_t ret = load_into_container((cf), (folder), (container), (mode));		\
+    	if (ret == NGX_HTTP_WAF_FAIL) {                                     \
+    		ngx_conf_log_error(NGX_LOG_ERR, (cf), 0, "ngx_waf: %s: %s", (folder), "Cannot read configuration.");    \
+    		return NGX_HTTP_WAF_FAIL;                                                                                  \
+    	}                                                                                                           \
+	}			\
     *(end) = '\0';                                                                                              \
 }
 

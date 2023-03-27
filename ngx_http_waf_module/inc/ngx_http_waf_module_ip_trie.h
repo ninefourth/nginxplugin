@@ -60,7 +60,7 @@ ngx_int_t ip_trie_find(ip_trie_t* trie, inx_addr_t* inx_addr, ip_trie_node_t** i
  * @return 成功返回 NGX_HTTP_WAF_SUCCESS，反之则不是
 */
 ngx_int_t ip_trie_clear(ip_trie_t* trie);
-
+ngx_int_t ip_trie_clear_with_lock(ip_trie_t* trie, ngx_atomic_t *lock);
 
 /**
  * @brief 先序遍历，并将每个节点存入 head 为头的链表里。

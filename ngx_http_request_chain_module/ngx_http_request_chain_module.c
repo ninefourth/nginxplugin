@@ -118,11 +118,11 @@ ngx_http_request_body_filter(ngx_http_request_t *r, ngx_chain_t *chain)
 static ngx_int_t
 ngx_http_access_handler(ngx_http_request_t *r)
 {
-	/*ngx_http_limit_req_conf_t   *lrcf;
+	ngx_http_limit_req_conf_t   *lrcf;
 	ngx_cycle_t *cycle;
 	cycle = (ngx_cycle_t*)ngx_cycle;
 	cycle->modules[ngx_http_request_chain_module.ctx_index];
-	lrcf = ngx_http_get_module_loc_conf(r, ngx_http_request_chain_module);*/
+	lrcf = ngx_http_get_module_loc_conf(r, ngx_http_request_chain_module);
     return NGX_DECLINED;
 }
 
@@ -135,7 +135,8 @@ ngx_http_request_filter_init(ngx_conf_t *cf)
 
 	cmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_core_module);
 
-    h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+//    h = ngx_array_push(&cmcf->phases[NGX_HTTP_ACCESS_PHASE].handlers);
+    h = ngx_array_push(&cmcf->phases[NGX_HTTP_PREACCESS_PHASE].handlers);
     if (h == NULL) {
         return NGX_ERROR;
     }
@@ -295,7 +296,7 @@ ngx_http_request_chain_limit_req_init_zone(ngx_shm_zone_t *shm_zone, void *data)
 char *
 ngx_http_request_chain_limit_zone(ngx_http_request_t *r,ngx_str_t *direct)
 {
-	ngx_int_t                    burst, delay ;
+	ngx_int_t                    burst=1, delay=1 ;
 	ngx_uint_t						hash, i;
     u_char                            *p;
     size_t                             len;
@@ -512,6 +513,11 @@ ngx_http_request_chain_limit_zone(ngx_http_request_t *r,ngx_str_t *direct)
 
     shm_zone->init = ngx_http_request_chain_limit_req_init_zone;
     shm_zone->data = ctx;
+
+
+	if (shm_zone->init(shm_zone, NULL) != NGX_OK) {
+		return NGX_CONF_ERROR;
+	}
 
     return NGX_CONF_OK;
 }

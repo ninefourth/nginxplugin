@@ -82,8 +82,8 @@ ngx_module_t  ngx_http_endpoint_module = {
     NGX_MODULE_V1,
     &ngx_http_endpoint_module_ctx, /* module context */
     ngx_http_endpoint_commands,    /* module directives */
-    NGX_HTTP_MODULE,                       /* module type */
-    NULL,                                  /* init master */
+    NGX_HTTP_MODULE,                     /* module type */
+	NULL,					                /* init master */
     NULL,                                  /* init module */
 	ngx_http_endpoint_init_process,               /* init process */
     NULL,                                  /* init thread */
@@ -126,6 +126,7 @@ static ngx_int_t request_log_enable_handler(void *msg); //打开日志的回调
 #ifdef NGX_HTTP_WAF_MODULE
 static ngx_int_t waf_reload_msg_handler(void *msg);//waf 名单回调
 static ngx_int_t waf_onoff_msg_handler(void *msg);//waf开关回调
+static ngx_int_t waf_reload_mode_handler(void *msg);//waf_mode 设置回调
 #endif
 
 #define CMD_PAYLOAD_SIZE	1   //消息传递指令，指示本消息是头信息，表现后面的消息体的大小
@@ -146,7 +147,7 @@ static void ngx_http_endpoint_channel_task(ngx_cycle_t *cycle,ngx_event_t *ev);
 /** partB */
 #define	max_dns		10
 #define	max_dns_len	100
-#define	max_waf_item		15
+#define	max_waf_item		20
 #define	max_waf_item_len	20
 typedef struct {
 	u_char			dns[max_dns][max_dns_len];
@@ -161,10 +162,15 @@ typedef struct {
 	u_short			onff[max_waf_item_len];
 }waf_onff;
 typedef struct {
+	u_char			waf_mode[max_waf_item][max_waf_item_len];
+	size_t			count;
+}waf_modes;
+typedef struct {
 	//TODO 有需要添加的共享内存数据就放到此结构体里
 	domainnames		dns;//如果有通过 domain/resovle/ 指令要求重新解析域名的在此做个记录，防止 某 work process被kill后能重新resolve,因为所有子进程重新启动后只是复制主进程的内容
 	waf_items		wfs; //waf的各项, 指令/waf/reload/[name]/ipv4 ，kill后的重加载
 	waf_onff			ws; //waf的开关
+	waf_modes		wfms; //waf_mode的重载 /waf/reloadmode/!STD
 } ngx_endpoint_shm_t;
 
 ngx_slab_pool_t *shpool = NULL;
@@ -414,8 +420,8 @@ static void make_request_log_filename(ngx_str_t *fl, ngx_pool_t *pool)
 {
 	size_t sz;
 	u_char *snm, *nm;
-	sz = fl->len+ngx_num_bit_count(ngx_pid)+2;
-	snm = nm = ngx_palloc(pool,sz);// . & \0
+	sz = fl->len+ngx_num_bit_count(ngx_pid)+1;
+	snm = nm = ngx_palloc(pool,sz);//tail is "."
 	ngx_memzero(nm,sz);
 	nm = ngx_strcat(nm,fl->data,fl->len);
 	nm = ngx_strcat(nm,(u_char*)".",1);
@@ -448,7 +454,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 
     if (value[0].len == 4 && ngx_strncasecmp(value[0].data, (u_char *)"list", 4) == 0) {
 #ifdef NGX_HTTP_UPSTREAM_XFDF_IP_HASH
-        con = ngx_xfdf_list_upstreams();
+        con = ngx_xfdf_list_upstreams(r->pool);
 //        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "-- %l ---%V----",con->len, con);
         if (con != NULL && con->len >0 ) {
         	buf_sz = ngx_http_out_content(r->pool,con,&out,1);
@@ -735,35 +741,53 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 				}
 				buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
 			}
-		}else if( resource->nelts == 4 && ngx_str_cmp2(&value[1],"reload") == 0 ) { // /waf/reload/[name]/ipv4
-    		ngx_conf_t cnf;
-    		cnf.pool = r->connection->pool;
-    		cnf.log = r->connection->log;
-    		cnf.conf_file = NULL;
-//    		if( ngx_str_cmp2(&value[3],NGX_HTTP_WAF_IPV4_FILE) == 0 ) {
-			if (wcf != NULL){
-				waf_data	data;
-				ngx_memzero(&data, sizeof(waf_data));
-				data.waf_cnf = wcf[i];
-				ngx_memcpy(data.flag,value[3].data,value[3].len);
-				buf_sz = ngx_get_msg(&msg,r->connection->pool,&data,sizeof(waf_data),waf_reload_msg_handler);
-				ngx_broadcast_processes(msg,buf_sz,r->connection->log);
-				//TODO 访问加锁防止清除旧数据时有进程的访问
-				if(ngx_http_waf_reload(&cnf,wcf[i],data.flag) != NGX_OK) {
-					ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "waf: reload [%V] error ",&value[3]);
-					buf_sz = ngx_http_out_content(r->pool,&fail,&out,1);
-					goto tail;
+		}else if( resource->nelts == 4 ) { // /waf/reload/[name]/ipv4
+			if( ngx_str_cmp2(&value[1],"reload") == 0 ) {
+				ngx_conf_t cnf;
+//				cnf.pool = ngx_cycle->pool;
+//				cnf.log = ngx_cycle->log;
+//				cnf.conf_file = NULL;
+				cnf.pool = NULL;
+				cnf.log = r->connection->log;
+				cnf.conf_file = NULL;
+	//    		if( ngx_str_cmp2(&value[3],NGX_HTTP_WAF_IPV4_FILE) == 0 ) {
+				if (wcf != NULL){
+					waf_data	data;
+					ngx_memzero(&data, sizeof(waf_data));
+					data.waf_cnf = wcf[i];
+					ngx_memcpy(data.flag,value[3].data,value[3].len);
+					buf_sz = ngx_get_msg(&msg,r->pool,&data,sizeof(waf_data),waf_reload_msg_handler);
+					ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+					//TODO 访问加锁防止清除旧数据时有进程的访问
+					if(ngx_http_waf_reload(&cnf,wcf[i],data.flag) != NGX_OK) {
+						ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "waf: reload [%V] error ",&value[3]);
+						buf_sz = ngx_http_out_content(r->pool,&fail,&out,1);
+						goto tail;
+					}
+					ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->wfs.waf_item,&shm_process->wfs.count,max_waf_item,max_waf_item_len,&value[3]);
 				}
-				ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->wfs.waf_item,&shm_process->wfs.count,max_waf_item,max_waf_item_len,&value[3]);
-			}
-//    		}
+    		} else if( ngx_str_cmp2(&value[1],"reloadmode") == 0 ) {
+    			if (wcf != NULL){
+    				waf_data	data;
+					ngx_memzero(&data, sizeof(waf_data));
+					data.waf_cnf = wcf[i];
+					ngx_memcpy(data.flag,value[3].data,value[3].len);
+					buf_sz = ngx_get_msg(&msg,r->pool,&data,sizeof(waf_data),waf_reload_mode_handler);
+					ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+    				if(ngx_http_waf_mode_reload(&value[3],1,wcf[i]) == NGX_ERROR) {
+    					ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "waf: reload mode [%V] error ",&value[3]);
+    					buf_sz = ngx_http_out_content(r->pool,&fail,&out,1);
+    					goto tail;
+    				}
+    				ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->wfms.waf_mode,&shm_process->wfms.count,max_waf_item,max_waf_item_len,&value[3]);
+    			}
+    		}
 			buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
     	}
 		#endif
 		//		buf = append_printf(r->pool, &sucs);
 	} else if(ngx_str_cmp2(&value[0],"log") == 0) {
 #ifdef NGX_HTTP_REQUEST_LOG
-		//TODO 广播到其它进程
 		if( resource->nelts == 2){
 			if(ngx_str_cmp2(&value[1],"print") == 0) { // /log/print?file=ac.log
 				ngx_str_t f;
@@ -771,6 +795,8 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 				ngx_http_get_param_value(r, arg_fl.data, arg_fl.len, &f);
 				if(f.len >0 ){
 					sz = f.len;
+					f.data = (u_char*)ngx_strcopy(r->pool,&f);
+					f.len = sz;
 					make_request_log_filename(&f,r->pool);
 					ngx_http_request_log_print(&f,r);
 					//
@@ -977,10 +1003,22 @@ static ngx_int_t waf_reload_msg_handler(void *msg)
 	waf_data	*wdata = (waf_data*)m->data;
 	waf_cnf = wdata->waf_cnf;
 	ngx_conf_t cnf;
-	cnf.pool = ngx_cycle->pool;
+	cnf.pool = NULL;//ngx_cycle->pool;
 	cnf.log = ngx_cycle->log;
 	cnf.conf_file = NULL;
 	return ngx_http_waf_reload(&cnf,waf_cnf,wdata->flag);
+}
+
+static ngx_int_t waf_reload_mode_handler(void *msg)
+{
+	ngx_channel_msg *m = msg;
+	ngx_http_waf_loc_conf_t *waf_cnf;
+	waf_data	*wdata = (waf_data*)m->data;
+	waf_cnf = wdata->waf_cnf;
+	ngx_str_t md;
+	md.data = (u_char*)wdata->flag;
+	md.len = strlen((char*)wdata->flag);
+	return ngx_http_waf_mode_reload(&md,1,waf_cnf);
 }
 #endif
 
@@ -1204,8 +1242,8 @@ ngx_http_endpoint_init_process(ngx_cycle_t *cycle)
 			for(size_t j = 0; j < waf_env_conf.count ; j++) {
 				wcfs = waf_env_conf.waf_cf->elts;
 				for( i = 0 ; i < shm_process->wfs.count ; i++) {
-					s.data = shm_process->wfs.waf_item[i];
-					s.len = strlen((char*)shm_process->wfs.waf_item[i]);
+//					s.data = shm_process->wfs.waf_item[i];
+//					s.len = strlen((char*)shm_process->wfs.waf_item[i]);
 					ngx_http_waf_reload(&cnf,wcfs[j],shm_process->wfs.waf_item[i]);
 				}
 			}
@@ -1218,6 +1256,18 @@ ngx_http_endpoint_init_process(ngx_cycle_t *cycle)
 				wcf->waf = shm_process->ws.onff[i];
 			}else{
 				break;
+			}
+		}
+		//
+		if(shm_process->wfms.count > 0) {
+			ngx_http_waf_loc_conf_t **wcfs = NULL ;
+			for(size_t j = 0; j < waf_env_conf.count ; j++) {
+				wcfs = waf_env_conf.waf_cf->elts;
+				for( i = 0 ; i < shm_process->wfms.count ; i++) {
+					s.data = shm_process->wfms.waf_mode[i];
+					s.len = strlen((char*)shm_process->wfms.waf_mode[i]);
+					ngx_http_waf_mode_reload(&s,1,wcfs[j]);
+				}
 			}
 		}
 #endif
@@ -1259,6 +1309,8 @@ ngx_http_endpoint_init_main_conf(ngx_conf_t *cf, void *conf)
 		ngx_chs->count++;
 	}
 
+	ngx_pool_create(cf->log);
+
     return NGX_CONF_OK;
 }
 
@@ -1282,3 +1334,4 @@ ngx_http_endpoint_exit_process(ngx_cycle_t *cycle)
 		}
 	}
 }
+

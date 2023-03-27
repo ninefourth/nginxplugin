@@ -118,7 +118,8 @@ ngx_int_t ngx_http_waf_init_process(ngx_cycle_t *cycle) {
 
 
 ngx_int_t ngx_http_waf_handler_access_phase(ngx_http_request_t* r) {
-    return ngx_http_waf_check_all(r, NGX_HTTP_WAF_TRUE);
+	ngx_int_t ret = ngx_http_waf_check_all(r, NGX_HTTP_WAF_TRUE);
+    return ret;
 }
 
 //modified
@@ -142,6 +143,11 @@ ngx_int_t ngx_http_waf_check_all(ngx_http_request_t* r, ngx_int_t is_check_cc) {
     ngx_http_waf_get_ctx_and_conf(r, &loc_conf, &ctx);
     ngx_int_t is_matched = NGX_HTTP_WAF_NOT_MATCHED;
     ngx_int_t http_status = NGX_DECLINED;
+
+    //modfied 取根ngx_http_waf_loc_conf_t的值，因为在初始化merge loc_conf的时候，全部赋过值，如果endpoint指令修改了根的值，子值不变
+    if(loc_conf != NULL && !ngx_http_waf_valid(loc_conf)) {
+			return NGX_DECLINED;
+    }
 
     if (ctx == NULL) {
         ngx_log_debug(NGX_LOG_DEBUG_CORE, r->connection->log, 0, 
@@ -209,7 +215,6 @@ ngx_int_t ngx_http_waf_check_all(ngx_http_request_t* r, ngx_int_t is_check_cc) {
         }
     }
     
-    //modfied 修改为取根ngx_http_waf_loc_conf_t的值，因为在初始化merge loc_conf的时候，全部赋过值，如果endpoint指令修改了根的值，子值不变
     if( !ngx_http_waf_valid(loc_conf) ) {
 //    if (loc_conf->waf == 0 || loc_conf->waf == NGX_CONF_UNSET) {
         http_status = NGX_DECLINED;

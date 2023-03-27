@@ -124,3 +124,5 @@ void ngx_append_line_file(ngx_str_t *cnf_file , ngx_str_t *line );//向指定文
 size_t ngx_shm_estimate_size(size_t size);
 ngx_shm_zone_t *ngx_shm_zone_init(ngx_conf_t *cf, ngx_module_t *module ,ngx_str_t *name, size_t size, void *data,ngx_shm_zone_init_pt shm_zone_init);
 ngx_shm_zone_t *ngx_shared_memory_find(ngx_cycle_t *cycle, ngx_str_t *name, void *tag);
+
+void ngx_pool_create(ngx_log_t *log);

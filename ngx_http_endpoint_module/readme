@@ -212,5 +212,13 @@ http://localhost:8100/waf/enable/[name]
 http://localhost:8100/waf/disable/[name]
 #查看waf是否启用
 http://localhost:8100/waf/show/[name]
+#改变检测模式,对应waf_mode指令,
+http://localhost:8100/waf/reloadmode/[name]/[mode]
+    ##[mode]为检测模式，可选参数为(前面为!是去除相应模式):
+"GET", "!GET","HEAD", "!HEAD","POST", "!POST","PUT", "!PUT","DELETE", "!DELETE","MKCOL", "!MKCOL","COPY", "!COPY","MOVE", "!MOVE","OPTIONS", 
+"!OPTIONS","PROPFIND", "!PROPFIND","PROPPATCH", "!PROPPATCH","LOCK", "!LOCK","UNLOCK", "!UNLOCK","PATCH", "!PATCH","TRACE", "!TRACE","CMN-METH", 
+"!CMN-METH","ALL-METH", "!ALL-METH","IP", "!IP","URL", "!URL","RBODY", "!RBODY","ARGS", "!ARGS","UA", "!UA","COOKIE", "!COOKIE","REFERER", 
+"!REFERER","CC", "!CC","ADV", "!ADV","STD", "!STD","STATIC", "!STATIC","DYNAMIC", "!DYNAMIC","FULL", "!FULL","CACHE", "!CACHE","LIB-INJECTION", 
+"!LIB-INJECTION","LIB-INJECTION-SQLI", "!LIB-INJECTION-SQLI","LIB-INJECTION-XSS", "!LIB-INJECTION-XSS"
 
 

@@ -219,6 +219,45 @@ ngx_int_t ngx_http_waf_free_memory(ngx_conf_t* cf, ngx_http_waf_loc_conf_t* conf
  * */
 ngx_int_t ngx_http_waf_reload(ngx_conf_t *cnf , ngx_http_waf_loc_conf_t *wcf, void* item);
 /**
+ * 重载是否启用指定的检查模块
+ * modes取下面的值
+	"GET", "!GET"
+	"HEAD", "!HEAD"
+	"POST", "!POST"
+	"PUT", "!PUT"
+	"DELETE", "!DELETE"
+	"MKCOL", "!MKCOL"
+	"COPY", "!COPY"
+	"MOVE", "!MOVE"
+	"OPTIONS", "!OPTIONS"
+	"PROPFIND", "!PROPFIND"
+	"PROPPATCH", "!PROPPATCH"
+	"LOCK", "!LOCK"
+	"UNLOCK", "!UNLOCK"
+	"PATCH", "!PATCH"
+	"TRACE", "!TRACE"
+	"CMN-METH", "!CMN-METH"
+	"ALL-METH", "!ALL-METH"
+	"IP", "!IP"
+	"URL", "!URL"
+	"RBODY", "!RBODY"
+	"ARGS", "!ARGS"
+	"UA", "!UA"
+	"COOKIE", "!COOKIE"
+	"REFERER", "!REFERER"
+	"CC", "!CC"
+	"ADV", "!ADV"
+	"STD", "!STD"
+	"STATIC", "!STATIC"
+	"DYNAMIC", "!DYNAMIC"
+	"FULL", "!FULL"
+	"CACHE", "!CACHE"
+	"LIB-INJECTION", "!LIB-INJECTION"
+	"LIB-INJECTION-SQLI", "!LIB-INJECTION-SQLI"
+	"LIB-INJECTION-XSS", "!LIB-INJECTION-XSS"
+ */
+ngx_int_t ngx_http_waf_mode_reload(ngx_str_t* modes, size_t len, ngx_http_waf_loc_conf_t *loc_conf);
+/**
  * @}
 */
 

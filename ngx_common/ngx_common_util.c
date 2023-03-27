@@ -8,6 +8,7 @@ static ngx_str_t http_body_param=ngx_string("body_");
 static ngx_str_t http_body=ngx_string("body");
 static ngx_str_t http_arg=ngx_string("arg");
 
+ngx_pool_t *ngx_global_pool = NULL;
 extern ngx_uint_t  ngx_pagesize;
 extern ngx_uint_t  ngx_pagesize_shift;
 
@@ -224,10 +225,11 @@ ngx_uint_t ngx_str_2_hash_evenly(u_char *s , size_t size)
 }
 
 void cpy_chars(u_char *des , u_char *sor , size_t size){
-	for( ; size-- >0; des++ ,sor++) {
+	ngx_memcpy(des,sor,size);
+	/*for( ; size-- >0; des++ ,sor++) {
 		*des = *sor;
-	}
-	*des='\0';
+	}*/
+	des[size]='\0';
 }
 
 ngx_uint_t read_line(u_char *buf)
@@ -1036,3 +1038,7 @@ ngx_shared_memory_find(ngx_cycle_t *cycle, ngx_str_t *name, void *tag)
     return NULL;
 }
 
+void ngx_pool_create(ngx_log_t *log)
+{
+	ngx_global_pool = ngx_create_pool(NGX_DEFAULT_POOL_SIZE, log);
+}

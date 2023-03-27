@@ -285,6 +285,22 @@ typedef struct ngx_http_waf_main_conf_s {
     ngx_array_t                    *local_caches;                               /**< 已经启用的所有的缓存管理器数组 */
 } ngx_http_waf_main_conf_t;
 
+//各项的锁，用于reload的场景
+typedef struct {
+	ngx_atomic_t    black_ipv4;
+	ngx_atomic_t    black_ipv6;
+	ngx_atomic_t    white_ipv4;
+	ngx_atomic_t    white_ipv6;
+	ngx_atomic_t    black_url;
+	ngx_atomic_t    black_args;
+	ngx_atomic_t    black_ua;
+	ngx_atomic_t    black_referer;
+	ngx_atomic_t    black_cookie;
+	ngx_atomic_t    black_post;
+	ngx_atomic_t    white_url;
+	ngx_atomic_t    white_referer;
+	ngx_atomic_t    advanced_rule;
+}ngx_http_waf_locks_t;
 
 /**
  * @struct ngx_http_waf_loc_conf_t
@@ -292,6 +308,7 @@ typedef struct ngx_http_waf_main_conf_s {
 */
 typedef struct ngx_http_waf_loc_conf_s {
     struct ngx_http_waf_loc_conf_s *parent;                                     /**< 上层配置，用来定位 CC 防护所使用的共享内存 */
+    ngx_http_waf_locks_t				lock;		//各项的锁，用于reload的场景
     u_char                          random_str[129];                            /**< 随机字符串 */
     ngx_str_t                       waf_under_attack_uri;                       /**< 五秒盾的 URI */
     ngx_int_t                       waf_under_attack;                           /**< 是否启用五秒盾 */
@@ -396,5 +413,6 @@ typedef struct vm_code_s {
     vm_code_type_e          type;   /**< 指令类型 */
     struct vm_stack_arg_s   argv;   /**< 指令参数 */
 } vm_code_t;
+
 
 #endif // !NGX_HTTP_WAF_MODULE_TYPE_H

@@ -30,6 +30,8 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stddef.h>   /* ptrdiff_t */
 #include <stdlib.h>   /* exit */
 
+#include <ngx_core.h>
+
 #if defined(HASH_DEFINE_OWN_STDINT) && HASH_DEFINE_OWN_STDINT
 /* This codepath is provided for backward compatibility, but I plan to remove it. */
 #warning "HASH_DEFINE_OWN_STDINT is deprecated; please use HASH_NO_STDINT instead"
@@ -74,14 +76,19 @@ do {                                                                            
 } while (0)
 #endif
 
+extern ngx_pool_t *ngx_global_pool;
+
 #ifndef uthash_malloc
-#define uthash_malloc(sz) malloc(sz)      /* malloc fcn                      */
+//#define uthash_malloc(sz) malloc(sz)      /* malloc fcn                      */
+#define uthash_malloc(sz) ((ngx_global_pool != NULL)? ngx_palloc(ngx_global_pool,sz) : malloc(sz))
 #endif
 #ifndef uthash_free
-#define uthash_free(ptr,sz) free(ptr)     /* free fcn                        */
+//#define uthash_free(ptr,sz) free(ptr)     /* free fcn                        */
+#define uthash_free(ptr,sz) ((ngx_global_pool != NULL)? ngx_pfree(ngx_global_pool,ptr) : free(ptr))
 #endif
 #ifndef uthash_bzero
-#define uthash_bzero(a,n) memset(a,'\0',n)
+//#define uthash_bzero(a,n) memset(a,'\0',n)
+#define uthash_bzero(a,n) ngx_memzero(a,n)
 #endif
 #ifndef uthash_strlen
 #define uthash_strlen(s) strlen(s)
@@ -132,6 +139,7 @@ do {                                                                            
 #define HASH_INITIAL_NUM_BUCKETS 32U     /* initial number of buckets        */
 #define HASH_INITIAL_NUM_BUCKETS_LOG2 5U /* lg2 of initial number of buckets */
 #define HASH_BKT_CAPACITY_THRESH 10U     /* expand when bucket count reaches */
+
 
 /* calculate the element whose hash handle address is hhp */
 #define ELMT_FROM_HH(tbl,hhp) ((void*)(((char*)(hhp)) - ((tbl)->hho)))
@@ -509,6 +517,13 @@ do {                                                                            
     HASH_REPLACE(hh,head,ptrfield,sizeof(void *),add,replaced)
 #define HASH_DEL(head,delptr)                                                    \
     HASH_DELETE(hh,head,delptr)
+
+#define HASH_DEL_INT(head,findint,out)                                                    \
+do {																				\
+	HASH_FIND(hh,head,findint,sizeof(int),out);											\
+	if( (out) != NULL)																\
+    	HASH_DELETE(hh,head,out);														\
+} while(0)
 
 /* HASH_FSCK checks hash integrity on every add/delete when HASH_DEBUG is defined.
  * This is for uthash developer only; it compiles away if HASH_DEBUG isn't defined.

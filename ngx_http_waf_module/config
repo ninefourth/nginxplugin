@@ -35,11 +35,11 @@ ngx_http_waf_module_libs=""
 ngx_http_waf_module_inc_path="$ngx_addon_dir/inc "
 
 
-if [ -n "$LIB_UTHASH" ] ;  then
-    ngx_http_waf_module_inc_path="${ngx_http_waf_module_inc_path} ${LIB_UTHASH}/include"
+#if [ -n "$LIB_UTHASH" ] ;  then
+#    ngx_http_waf_module_inc_path="${ngx_http_waf_module_inc_path} ${LIB_UTHASH}/include"
     #modified
     ngx_http_waf_module_inc_path="${ngx_http_waf_module_inc_path} $ngx_addon_dir/../ngx_common"
-fi
+#fi
 
 which flex
 if [ $? -ne 0 ] ; then

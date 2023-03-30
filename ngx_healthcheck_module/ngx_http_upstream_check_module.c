@@ -373,7 +373,8 @@ struct ngx_http_upstream_check_srv_conf_s {
 };
 
 
-typedef struct {
+typedef struct ngx_http_upstream_check_loc_conf_s{
+	struct ngx_http_upstream_check_loc_conf_s	*parent;
     ngx_check_status_conf_t                 *format;
     ngx_str_t                             type_name;
 
@@ -4396,11 +4397,16 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 {
     ngx_http_upstream_check_loc_conf_t    *uclcf;
     key_region_confs_t     *krc;
-    void **cnfs;
+//    void **cnfs;
     ngx_int_t	r_tpl = default_region ;
 
     uclcf = ngx_http_get_module_loc_conf(r, ngx_http_upstream_check_module);
 
+    while (uclcf != NULL && uclcf->shm_key_region_confs == NULL) {
+    	uclcf = uclcf->parent;
+    }
+
+/*
     if (uclcf == NULL || uclcf->shm_key_region_confs == NULL){
         //在nginx配置文件的if判断中变量赋值后，取不到request的location配置，所以借用signature保存location配置相对地址
     	 if(r->signature != NGX_HTTP_MODULE){
@@ -4410,7 +4416,7 @@ ngx_uint_t ngx_http_upstream_request_region(ngx_http_request_t *r)
 			r->lowcase_index = r->signature;
 			r->signature = NGX_HTTP_MODULE;
 		}
-    }
+    }*/
 
     if(uclcf == NULL) {
     	return default_region;
@@ -5472,6 +5478,7 @@ ngx_http_upstream_check_create_loc_conf(ngx_conf_t *cf)
         return NULL;
     }
 
+    uclcf->parent = NULL;
     uclcf->format = NGX_CONF_UNSET_PTR;
 
 	loc = &((ngx_str_t*)cf->args->elts)[0];
@@ -5576,6 +5583,8 @@ ngx_http_upstream_check_merge_loc_conf(ngx_conf_t *cf, void *parent,
     ngx_str_t                            format = ngx_string("html");
     ngx_http_upstream_check_loc_conf_t  *prev = parent;
     ngx_http_upstream_check_loc_conf_t  *conf = child;
+
+    conf->parent = prev;
 
     ngx_conf_merge_ptr_value(conf->format, prev->format,
                              ngx_http_get_check_status_format_conf(&format));
@@ -6058,7 +6067,7 @@ ngx_http_access_handler(ngx_http_request_t *r)
 	}
     return NGX_DECLINED;
 }
-
+/*
 static ngx_int_t
 ngx_http_rewrite_handler(ngx_http_request_t *r)
 {
@@ -6081,7 +6090,7 @@ ngx_http_log_handler(ngx_http_request_t *r)
 	}
 	return NGX_DECLINED;
 }
-
+*/
 static ngx_int_t
 ngx_http_upstream_modify_conf(ngx_conf_t *cf)
 {
@@ -6095,7 +6104,7 @@ ngx_http_upstream_modify_conf(ngx_conf_t *cf)
         return NGX_ERROR;
     }
     *h = ngx_http_access_handler;
-
+/*
     //在rewrite之前先拿到request的location_configure
     h = ngx_array_push(&cmcf->phases[NGX_HTTP_REWRITE_PHASE].handlers);
 	if (h == NULL) {
@@ -6108,7 +6117,7 @@ ngx_http_upstream_modify_conf(ngx_conf_t *cf)
 		return NGX_ERROR;
 	}
 	*h = ngx_http_log_handler;
-
+*/
     return NGX_OK;
 }
 

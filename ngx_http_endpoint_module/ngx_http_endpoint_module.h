@@ -6,6 +6,9 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
-void ngx_append(ngx_chain_t *p , ngx_chain_t *c);
+ngx_int_t is_debug_log();
+
+#define ngx_log_debug_process(level, log, ...)                                        \
+    if (is_debug_log() == 1) ngx_log_error(level, log, __VA_ARGS__)
 
 #endif

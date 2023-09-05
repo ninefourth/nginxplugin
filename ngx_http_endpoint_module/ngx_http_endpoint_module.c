@@ -11,7 +11,7 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 #include <ngx_channel.h>
-
+#include <ngx_http_endpoint_module.h>
 #include "../ngx_common/ngx_common_util.h"
 
 #if (NGX_HTTP_UPSTREAM_XFDF_IP_HASH)
@@ -114,19 +114,26 @@ typedef struct {
 } ngx_process_args;
 ngx_process_args		ngx_args; //当前 work process 的特有变量
 
-typedef ngx_int_t (*msg_handler)(void *msg); //接收消息后，回调处理信息
-static ngx_int_t dn_msg_handler(void *msg); //域名刷新的回调
+typedef ngx_int_t (*msg_handler)(void *msg, ngx_str_t *emsg); //接收消息后，回调处理信息
+static ngx_int_t dn_msg_handler(void *msg, ngx_str_t *emsg); //域名刷新的回调
+static ngx_int_t up_srv_add_msg_handler(void *msg, ngx_str_t *emsg); //动态添加server的回调
+static ngx_int_t up_srv_main_add_msg_handler(void *msg, ngx_str_t *emsg);
+static ngx_int_t up_srv_remove_msg_handler(void *msg, ngx_str_t *emsg); //动态删除server的回调
+static ngx_int_t up_srv_main_remove_msg_handler(void *msg, ngx_str_t *emsg);
+static ngx_int_t remove_up_srv(ngx_str_t *up, ngx_str_t *sv);
+static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s);
+static ngx_int_t _up_srv_main_remove_msg_handler(ngx_str_t *s);
 
 #ifdef NGX_HTTP_REQUEST_LOG
-static ngx_int_t request_log_msg_handler(void *msg);//请求日志的回调
-static ngx_int_t request_log_disable_handler(void *msg);//关闭日志的回调
-static ngx_int_t request_log_enable_handler(void *msg); //打开日志的回调
+static ngx_int_t request_log_msg_handler(void *msg, ngx_str_t *emsg);//请求日志的回调
+static ngx_int_t request_log_disable_handler(void *msg, ngx_str_t *emsg);//关闭日志的回调
+static ngx_int_t request_log_enable_handler(void *msg, ngx_str_t *emsg); //打开日志的回调
 #endif
 
 #ifdef NGX_HTTP_WAF_MODULE
-static ngx_int_t waf_reload_msg_handler(void *msg);//waf 名单回调
-static ngx_int_t waf_onoff_msg_handler(void *msg);//waf开关回调
-static ngx_int_t waf_reload_mode_handler(void *msg);//waf_mode 设置回调
+static ngx_int_t waf_reload_msg_handler(void *msg, ngx_str_t *emsg);//waf 名单回调
+static ngx_int_t waf_onoff_msg_handler(void *msg, ngx_str_t *emsg);//waf开关回调
+static ngx_int_t waf_reload_mode_handler(void *msg, ngx_str_t *emsg);//waf_mode 设置回调
 #endif
 
 #define CMD_PAYLOAD_SIZE	1   //消息传递指令，指示本消息是头信息，表现后面的消息体的大小
@@ -139,7 +146,7 @@ typedef struct {
 	char				data[1]; 	//实际传输的数据
 } ngx_channel_msg; //传递的消息
 
-ngx_int_t ngx_broadcast_processes(ngx_channel_msg *msg, size_t size, ngx_log_t *log); //对所其它子进程广播消息
+ngx_int_t ngx_broadcast_processes(ngx_channel_msg *msg, size_t size, ngx_log_t *log, ngx_int_t pos); //对所其它子进程广播消息
 static size_t ngx_get_msg(ngx_channel_msg **msg, ngx_pool_t *pool, void *data, size_t size , msg_handler handler); //创建一个ngx_channel_msg用于传递，返回消息体和整个消息的大小
 
 static void ngx_http_endpoint_channel_task(ngx_cycle_t *cycle,ngx_event_t *ev);
@@ -149,6 +156,8 @@ static void ngx_http_endpoint_channel_task(ngx_cycle_t *cycle,ngx_event_t *ev);
 #define	max_dns_len	100
 #define	max_waf_item		20
 #define	max_waf_item_len	20
+#define	max_dyn_up_srv		500
+#define	max_dyn_up_srv_len		100
 typedef struct {
 	u_char			dns[max_dns][max_dns_len];
 	size_t			count;
@@ -166,11 +175,17 @@ typedef struct {
 	size_t			count;
 }waf_modes;
 typedef struct {
+	u_char			up_srvs[max_dyn_up_srv][max_dyn_up_srv_len];
+	size_t			count;
+}dyn_up_srvs;
+typedef struct {
 	//TODO 有需要添加的共享内存数据就放到此结构体里
 	domainnames		dns;//如果有通过 domain/resovle/ 指令要求重新解析域名的在此做个记录，防止 某 work process被kill后能重新resolve,因为所有子进程重新启动后只是复制主进程的内容
 	waf_items		wfs; //waf的各项, 指令/waf/reload/[name]/ipv4 ，kill后的重加载
 	waf_onff			ws; //waf的开关
 	waf_modes		wfms; //waf_mode的重载 /waf/reloadmode/!STD
+	dyn_up_srvs		dus; //动态添加 upstream/server
+	ngx_atomic_t		debug_log; //是否输出调试日志
 } ngx_endpoint_shm_t;
 
 ngx_slab_pool_t *shpool = NULL;
@@ -191,9 +206,17 @@ typedef struct {
 } waf_data;
 #endif
 
+#define ngx_msg_str(str_t,s)     { str_t.len = strlen((char*)s); str_t.data = s; }
+
 static ngx_str_t sucs = ngx_string("success");
 static ngx_str_t fail = ngx_string("failure");
 
+void ngx_append(ngx_chain_t *p , ngx_chain_t *c);
+
+ngx_int_t is_debug_log()
+{
+	return (shm_process != NULL && shm_process->debug_log == 1);
+}
 
 /** content */
 //将内容val添加到输出链out,当输出内容长度大于 pool一次可以提供的大小时，就截断到链里
@@ -205,7 +228,7 @@ ngx_http_out_content( ngx_pool_t *pool, ngx_str_t *val, ngx_chain_t *out, ngx_ui
 	ngx_str_t					val_native;
 	size_t					len=0;
 	if(val->len > pool->max) {
-		out_native = ngx_palloc(pool, sizeof(ngx_chain_t));
+		out_native = ngx_pcalloc(pool, sizeof(ngx_chain_t));
 		val_native.data = val->data;
 		val_native.len = pool->max;
 		buf = append_printf(pool, &val_native,0);
@@ -244,7 +267,7 @@ ngx_append(ngx_chain_t *p , ngx_chain_t *c)
  * size表示字符串数的最大数量
  * tl 表示字符串数组是每个字符串的最大长度
  * */
-void ngx_http_endpoint_item_shm_process_directive(/*out*/u_char *data, /*out*/size_t *sz,size_t size,size_t tl, ngx_str_t *s)
+void ngx_http_endpoint_item_shm_process_directive(/*out*/u_char *data, /*out*/size_t *sz, size_t size, size_t tl, ngx_str_t *s)
 {
 	ngx_uint_t i;
 	for( i = 0; i < size ; i++, data+=sizeof(u_char)*tl ) {
@@ -255,6 +278,23 @@ void ngx_http_endpoint_item_shm_process_directive(/*out*/u_char *data, /*out*/si
 			break;
 		}
 		if( ngx_str_cmp2(s,(char*)data) == 0){
+			break;
+		}
+	}
+}
+
+//删除指定变量内容,fuzzy=1代表包含, =0代表等于
+void ngx_http_endpoint_item_shm_process_remove_directive(/*out*/u_char *data, /*out*/size_t *sz, size_t size, size_t tl, ngx_str_t *s, ngx_int_t fuzzy)
+{
+	ngx_uint_t i;
+	ngx_str_t s1;
+	u_char *p = data;
+	for( i = 0; i < size ; i++, data+=sizeof(u_char)*tl ) {
+		s1.data = data;
+		s1.len = strlen((char*)data);
+		if( (fuzzy && ngx_str_index_of_str(&s1, s) >=0) || (!fuzzy && ngx_str_cmp2(s,(char*)data) == 0) ) {
+			ngx_array_mem_move(p, i, i+1, sizeof(u_char)*tl, size, NULL);
+			(*sz)--;
 			break;
 		}
 	}
@@ -436,7 +476,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 {
     ngx_int_t                  rc,status;
     ngx_chain_t                out;
-    ngx_str_t                  *value;
+    ngx_str_t                  *value, errmsg;
 	size_t					buf_sz = 0;
 
     rc = ngx_http_discard_request_body(r);
@@ -532,8 +572,13 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
             ngx_str_t *up = &value[1]; //upstream
             ngx_str_t *sr = &value[2]; //server
             ngx_str_t *wt = &value[3]; //weight
-            ngx_uint_t w = ngx_atoi(wt->data, wt->len);
-            ngx_xfdf_deal_peer_weight(up,sr,w);
+            ngx_int_t w = ngx_atoi(wt->data, wt->len);
+            if(w < 0) {
+				ngx_msg_str(errmsg,(u_char*)"weight error!!!");
+				buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+				goto tail;
+			}
+            ngx_xfdf_deal_peer_weight(up,sr,(ngx_uint_t)w);
             buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
         }
 #endif
@@ -567,6 +612,25 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     			ngx_reload_region_conf(&f,ngx_str_2_hash(upstream));
     			buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
         	}
+    	}
+    	//
+    	if( resource->nelts == 4 ){ // /region/[upstream]/[name]/[region]
+    		ngx_str_t *upstream = &value[1]; //upstream name
+    		ngx_str_t *srnm = &value[2]; //name
+    		ngx_int_t rg;
+    		ngx_http_upstream_rr_peer_t *p;
+    		rg = ngx_atoi(value[3].data,value[3].len); //region
+			if(rg == NGX_ERROR) {
+				ngx_msg_str(errmsg,(u_char*)"region error!!!");
+				buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+				goto tail;
+			}
+			//
+			p = ngx_xfdf_deal_server_get_peer(NULL, upstream, srnm);
+			if( p != NULL){
+				ngx_set_region(ngx_str_2_hash(upstream), &p->server, rg);
+				buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
+			}
     	}
 #endif
     } else if (value[0].len == 6 && ngx_strncasecmp(value[0].data, (u_char *)"router", 6) == 0 ) {
@@ -628,10 +692,15 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     		ngx_str_t *router_name = &value[1]; //router name
     		if( value[3].len == 3 && ngx_strncasecmp(value[3].data, (u_char *)"add", 3) == 0){
     			ngx_str_t *idxt = &value[2]; //variable index
-    			ngx_uint_t idx = ngx_atoi(idxt->data, idxt->len);
+    			ngx_int_t idx = ngx_atoi(idxt->data, idxt->len);
+    			if(idx < 0) {
+					ngx_msg_str(errmsg,(u_char*)"index error!!!");
+					buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+					goto tail;
+				}
     			ngx_str_t *k = &value[4];
     			ngx_str_t *v = &value[5];
-    			ngx_add_router_item(r->pool ,router_name,idx,k,ngx_atoi(v->data, v->len));
+    			ngx_add_router_item(r->pool ,router_name,(ngx_uint_t)idx,k,ngx_atoi(v->data, v->len));
     			buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
     		}
     	}
@@ -670,7 +739,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 				}else {
 					ngx_channel_msg *msg;
 					buf_sz = ngx_get_msg(&msg,r->connection->pool,dn->data,dn->len,dn_msg_handler);
-					ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+					ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
 					if (ngx_http_endpoint_reslove_dn(ngx_cycle->pool,dn) == NGX_OK) {
 						buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
 					} else {
@@ -727,7 +796,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 					data.waf_cnf = wcf[i];
 					ngx_memcpy(data.flag,&wcf[i]->waf,sizeof(ngx_int_t));
 					buf_sz = ngx_get_msg(&msg,r->connection->pool,&data,sizeof(waf_data),waf_onoff_msg_handler);
-					ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+					ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
 					for(ngx_int_t j = 0; j < max_waf_item_len; j++) {
 						if(shm_process->ws.waf_addrs[j] == 0) {
 							shm_process->ws.waf_addrs[j] = (uintptr_t)wcf[i];
@@ -757,7 +826,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 					data.waf_cnf = wcf[i];
 					ngx_memcpy(data.flag,value[3].data,value[3].len);
 					buf_sz = ngx_get_msg(&msg,r->pool,&data,sizeof(waf_data),waf_reload_msg_handler);
-					ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+					ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
 					//TODO 访问加锁防止清除旧数据时有进程的访问
 					if(ngx_http_waf_reload(&cnf,wcf[i],data.flag) != NGX_OK) {
 						ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "waf: reload [%V] error ",&value[3]);
@@ -773,7 +842,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 					data.waf_cnf = wcf[i];
 					ngx_memcpy(data.flag,value[3].data,value[3].len);
 					buf_sz = ngx_get_msg(&msg,r->pool,&data,sizeof(waf_data),waf_reload_mode_handler);
-					ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+					ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
     				if(ngx_http_waf_mode_reload(&value[3],1,wcf[i]) == NGX_ERROR) {
     					ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "waf: reload mode [%V] error ",&value[3]);
     					buf_sz = ngx_http_out_content(r->pool,&fail,&out,1);
@@ -803,7 +872,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 					ngx_channel_msg *msg;
 					f.len = sz ;
 					buf_sz = ngx_get_msg(&msg,r->connection->pool,f.data,f.len,request_log_msg_handler);
-					ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+					ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
 					//
 					buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
 				}
@@ -811,19 +880,127 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 				ngx_http_request_log_disable();
 				ngx_channel_msg *msg;
 				buf_sz = ngx_get_msg(&msg,r->connection->pool,NULL,0,request_log_disable_handler);
-				ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+				ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
 				buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
 			} else if(ngx_str_cmp2(&value[1],"enable") == 0) { // /log/enable
 				ngx_http_request_log_enable();
 				ngx_channel_msg *msg;
 				buf_sz = ngx_get_msg(&msg,r->connection->pool,NULL,0,request_log_enable_handler);
-				ngx_broadcast_processes(msg,buf_sz,r->connection->log);
+				ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
 				buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
 			}
-
 		}
 #endif
-	} else if(value[0].len == 5 && ngx_strncasecmp(value[0].data, (u_char *)"limit", 5) == 0) {
+		if( resource->nelts == 3){
+			if(ngx_str_cmp2(&value[1],"debug") == 0) {
+				if(ngx_str_cmp2(&value[2],"disable") == 0) { // /log/debug/disable
+					shm_process->debug_log = 0;
+					buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
+				} else if(ngx_str_cmp2(&value[2],"enable") == 0) { // /log/debug/enable
+					shm_process->debug_log = 1;
+					buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
+				}
+			}
+		}
+	} else if(resource->nelts == 5 && ngx_str_cmp2(&value[0],"add") == 0 ) { //  /add/[upstream]/[host]/[region]/[weight]
+		ngx_channel_msg *msg;
+		ngx_int_t rg,wt;
+		rg = ngx_atoi(value[3].data,value[3].len); //region
+		if(rg == NGX_ERROR) {
+			ngx_msg_str(errmsg,(u_char*)"region error!!!");
+			buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+			goto tail;
+		}
+		wt = ngx_atoi(value[4].data,value[4].len); //weight
+		if(wt == NGX_ERROR) {
+			ngx_msg_str(errmsg,(u_char*)"weight error!!!");
+			buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+			goto tail;
+		}
+		//发送给第0位的进程，由此进程处理完毕再广播到其它进程，避免进程锁的使用
+		buf_sz = ngx_get_msg(&msg,r->pool,r->uri.data,r->uri.len,up_srv_main_add_msg_handler);
+//		_up_srv_main_add_msg_handler(&r->uri);
+		ngx_broadcast_processes(msg,buf_sz,r->connection->log,1);
+/*
+		ngx_str_t *up,*sv;
+		ngx_int_t rg,wt,idx;
+		ngx_http_upstream_srv_conf_t *us;
+		ngx_http_upstream_rr_peer_t *p;
+		up = &value[1]; //upstream
+		sv = &value[2]; //server
+		rg = ngx_atoi(value[3].data,value[3].len); //region
+		if(rg < 0) {
+			ngx_msg_str(errmsg,(u_char*)"region error!!!");
+			buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+			goto tail;
+		}
+		wt = ngx_atoi(value[4].data,value[4].len); //weight
+		if(wt < 0) {
+			ngx_msg_str(errmsg,(u_char*)"weight error!!!");
+			buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+			goto tail;
+		}
+		//新增peer
+		p = ngx_xfdf_add_upstream_peer(up,sv,wt);
+		if( p != NULL) {
+			ngx_channel_msg *msg;
+			us = ngx_xfdf_get_upstream_srv_conf(up);
+			idx = ngx_http_upstream_check_add_check_peer(us, p);
+	//		ngx_http_upstream_check_add_peer(cf, us, peer);
+			//共享内存shm_peer
+			ngx_http_upstream_check_add_shm_peer(idx, rg, wt);
+			//
+			buf_sz = ngx_get_msg(&msg,r->pool,r->uri.data,r->uri.len,up_srv_add_msg_handler);
+			ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
+			//
+			ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->dus.up_srvs,
+					&shm_process->dus.count,
+					max_dyn_up_srv,
+					max_dyn_up_srv_len,
+					&r->uri);
+		}*/
+		buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
+	} else if(resource->nelts == 3 && ngx_str_cmp2(&value[0],"remove") == 0) { //  /remove/[upstream]/[host]
+		ngx_channel_msg *msg;
+		buf_sz = ngx_get_msg(&msg,r->pool,r->uri.data,r->uri.len,up_srv_main_remove_msg_handler);
+		//发送给第0位的进程，由此进程处理完毕再广播到其它进程，避免进程锁的使用
+//		_up_srv_main_remove_msg_handler(&r->uri);
+		ngx_broadcast_processes(msg,buf_sz,r->connection->log, 1);
+		buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
+		/*ngx_str_t *up, *sv, dr;
+		ngx_channel_msg *msg;
+		ngx_int_t	idx;
+		up = &value[1]; //upstream
+		sv = &value[2]; //server
+
+		//rr_peer xfdf_peer shm_peer check_peer 清除消息
+		//rr_peer xfdf_peer check_peer
+		idx = remove_up_srv(up, sv);
+		if( idx == -2 ) {
+			ngx_msg_str(errmsg,(u_char*)"has't such rr peer error!!!");
+			buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+		} else if( idx <= 0 ) {
+			ngx_msg_str(errmsg,(u_char*)"has't such check peer error!!!");
+			buf_sz = ngx_http_out_content(r->pool,&errmsg,&out,1);
+		} else {
+			//广播到其它进程执行删除任务
+			buf_sz = ngx_get_msg(&msg,r->pool,r->uri.data,r->uri.len,up_srv_remove_msg_handler);
+			ngx_broadcast_processes(msg,buf_sz,r->connection->log, -1);
+			//shm_peer
+			ngx_http_upstream_check_remove_shm_peer(idx);
+			buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
+			//
+			dr.data = r->uri.data + 7; // strlen("/remote") == 7
+			dr.len = r->uri.len - 7;
+			//清除消息
+			ngx_http_endpoint_item_shm_process_remove_directive((u_char*)shm_process->dus.up_srvs,
+								&shm_process->dus.count,
+								max_dyn_up_srv,
+								max_dyn_up_srv_len,
+								&dr, 1);
+		}*/
+	}
+	else if(value[0].len == 5 && ngx_strncasecmp(value[0].data, (u_char *)"limit", 5) == 0) {
 		#ifdef NGX_HTTP_REQUEST_CHAIN
     	    ngx_str_t s=ngx_string("$proxy_add_x_forwarded_for , zone=bus_r:1m , rate=2r/s ,burst=1,location=/store/");
     		ngx_http_request_chain_limit_zone(r,&s);
@@ -944,19 +1121,23 @@ ngx_get_msg(ngx_channel_msg **msg, ngx_pool_t *pool, void *data, size_t size , m
 }
 
 #ifdef NGX_HTTP_REQUEST_LOG
-static ngx_int_t request_log_disable_handler(void *msg)
+static ngx_int_t request_log_disable_handler(void *msg, ngx_str_t *emsg)
 {
 	ngx_http_request_log_disable();
+	emsg->data = (u_char*)"request_log_disable_handler";
+	emsg->len = strlen((char*)emsg->data);
 	return NGX_OK;
 }
 
-static ngx_int_t request_log_enable_handler(void *msg)
+static ngx_int_t request_log_enable_handler(void *msg, ngx_str_t *emsg)
 {
 	ngx_http_request_log_enable();
+	emsg->data = (u_char*)"request_log_enable_handler";
+	emsg->len = strlen((char*)emsg->data);
 	return NGX_OK;
 }
 
-static ngx_int_t request_log_msg_handler(void *msg)
+static ngx_int_t request_log_msg_handler(void *msg, ngx_str_t *emsg)
 {
 	ngx_http_request_t r;
 	ngx_connection_t  c;
@@ -971,20 +1152,221 @@ static ngx_int_t request_log_msg_handler(void *msg)
 	r.connection->log = ngx_cycle->log;
 	r.start_sec = 0;
 	ngx_http_request_log_print(&f,&r);
+	emsg->data = (u_char*)"request_log_msg_handler";
+	emsg->len = strlen((char*)emsg->data);
 	return NGX_OK;
 }
 #endif
-static ngx_int_t dn_msg_handler(void *msg)
+static ngx_int_t dn_msg_handler(void *msg, ngx_str_t *emsg)
 {
 	ngx_channel_msg *m = msg;
 	ngx_str_t dn;
 	dn.data = (u_char*)m->data;
 	dn.len = m->size;
+	emsg->data = (u_char*)"dn_msg_handler";
+	emsg->len = strlen((char*)emsg->data);
 	return ngx_http_endpoint_reslove_dn(ngx_cycle->pool,&dn);
 }
 
+static void
+parse_up_srv_from_uri(ngx_str_t *s, /*out*/ngx_str_t *up, ngx_str_t *sv, ngx_str_t *swt, ngx_str_t *srg)
+{
+	ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 1, up);
+	ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 2, sv);
+	ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 3, srg);
+	ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 4, swt);
+}
+
+static ngx_int_t add_up_srv(ngx_str_t *up, ngx_str_t *sv, ngx_str_t *swt, ngx_str_t *srg)
+{
+	ngx_int_t wt,idx = -1;
+	ngx_http_upstream_srv_conf_t *us;
+	ngx_http_upstream_rr_peer_t *p;
+
+//	rg = ngx_atoi(srg->data,srg->len); //region
+	wt = ngx_atoi(swt->data,swt->len); //weight
+	//新增peer
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=1================ %d", ngx_pid);
+	p = ngx_xfdf_add_upstream_peer(up,sv,wt);
+	if( p != NULL) {
+		us = ngx_xfdf_get_upstream_srv_conf(up);
+		ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=2================ %d", ngx_pid);
+		idx = ngx_http_upstream_check_add_check_peer(us, p);
+		ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=3================ %d", ngx_pid);
+		ngx_http_upstream_append_peer(up, p);
+	}
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=4================ %d", ngx_pid);
+	return idx;
+}
+
+static ngx_int_t up_srv_add_msg_handler(void *msg, ngx_str_t *emsg)
+{
+	ngx_channel_msg *m = msg;
+	ngx_str_t s, up, sv, swt, srg;
+	ngx_int_t idx;
+	s.data = (u_char*)m->data;
+	s.len = m->size;
+	parse_up_srv_from_uri(&s, &up, &sv, &swt, &srg);
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-process add start------------------------ %d %V", ngx_pid, &sv);
+	idx = add_up_srv(&up, &sv, &swt, &srg);
+	if( idx >= 0) {
+		ngx_http_upstream_check_add_timers((ngx_cycle_t*)ngx_cycle, idx, idx);
+	}
+	emsg->data = (u_char*)"up_srv_add_msg_handler";
+	emsg->len = strlen((char*)emsg->data);
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-process add end------------------------ %d %V", ngx_pid, &sv);
+	return idx;
+}
+
+static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s)
+{
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-add start------------------------ %d %V", ngx_pid, s);
+	ngx_str_t up, sv, swt, srg;
+	ngx_int_t idx, rg, wt;
+	parse_up_srv_from_uri(s, &up, &sv, &swt, &srg);
+	if ( (idx = add_up_srv(&up, &sv, &swt, &srg)) >= 0 ) {
+		ngx_channel_msg *msg1;
+		size_t 	buf_sz = 0;
+		//shm已经被0号进程设置，这里主要是加入定时检测
+		rg = ngx_atoi(srg.data,srg.len); //region
+		wt = ngx_atoi(swt.data,swt.len); //weight
+		ngx_http_upstream_check_add_shm_peer(idx, rg, wt);
+		//
+		buf_sz = ngx_get_msg(&msg1,ngx_cycle->pool,s->data,s->len,up_srv_add_msg_handler);
+		//广播到所有其它进程
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "-1b---------------------- %d", ngx_pid);
+		ngx_broadcast_processes(msg1,buf_sz,ngx_cycle->log, -1);
+		ngx_pfree(ngx_cycle->pool, msg1);
+
+		ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->dus.up_srvs,
+				&shm_process->dus.count,
+				max_dyn_up_srv,
+				max_dyn_up_srv_len,
+				s);
+	}
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-add end------------------------ %d %V", ngx_pid, s);
+	return NGX_OK;
+}
+
+static ngx_int_t up_srv_main_add_msg_handler(void *msg, ngx_str_t *emsg)
+{
+	ngx_channel_msg *m = msg;
+	ngx_str_t s;
+	s.data = (u_char*)m->data;
+	s.len = m->size;
+	emsg->data = (u_char*)"up_srv_main_add_msg_handler";
+	emsg->len = strlen((char*)emsg->data);
+	return _up_srv_main_add_msg_handler(&s);
+}
+
+static ngx_int_t remove_up_srv(ngx_str_t *up, ngx_str_t *sv)
+{
+	ngx_int_t idx = -2; // -2: has't rr_peer ; -1(NGX_ERROR): hasn't check_peer
+	ngx_http_upstream_srv_conf_t *us;
+	ngx_http_upstream_rr_peer_t *p;
+
+	//rr_peer xfdf_peer
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=a11================ %d", ngx_pid);
+	p = ngx_xfdf_remove_upstream_peer(up, sv);
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=a22================ %d", ngx_pid);
+	if( p != NULL) {
+		us = ngx_xfdf_get_upstream_srv_conf(up);
+		ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=a33================ %d", ngx_pid);
+		//check_peer
+		idx = ngx_http_upstream_check_remove_check_peer(us, up, p);
+		ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=a44================ %d", ngx_pid);
+		ngx_http_upstream_release_rr_peer(p);
+		ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=a55================ %d", ngx_pid);
+	}
+	//
+	return idx;
+}
+
+static ngx_int_t up_srv_remove_msg_handler(void *msg, ngx_str_t *emsg)
+{
+	ngx_str_t up,sv;
+	ngx_int_t idx;
+	ngx_channel_msg *m = msg;
+
+	ngx_str_sch_idx_trimtoken((u_char*)m->data, m->size, '/', 1, &up);//upstream
+	ngx_str_sch_idx_trimtoken((u_char*)m->data, m->size, '/', 2, &sv);//server
+
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-process remove start------------------------ %d %V", ngx_pid, &sv);
+	idx = remove_up_srv(&up, &sv);
+ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=a66================ %d %d", ngx_pid, idx);
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "=33================ %d  %d", ngx_pid, idx);
+//	if( idx >= 0) {
+//		ngx_http_upstream_check_add_peers_timers(idx);
+//	}
+ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=a77================ %d %d", ngx_pid, idx);
+	emsg->data = (u_char*)"up_srv_remove_msg_handler";
+	emsg->len = strlen((char*)emsg->data);
+ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=a88================ %d %d", ngx_pid, idx);
+ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-process remove end------------------------ %d %V", ngx_pid, &sv);
+	return idx;
+}
+
+static ngx_int_t _up_srv_main_remove_msg_handler(ngx_str_t *s)
+{
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-remove start------------------------ %d %V", ngx_pid, s);
+	ngx_str_t up,sv;
+	ngx_int_t	idx;
+	size_t 	buf_sz = 0;
+	//
+	ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 1, &up);//upstream
+	ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 2, &sv);//server
+
+	//rr_peer xfdf_peer shm_peer check_peer 清除消息
+	//rr_peer xfdf_peer check_peer
+	if( ngx_xfdf_upstream_peer_is_es(&up, &sv) == 0 ) { //固定的,不是弹性的不能删
+		ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "peer is not elastic one [%V] [%V]", &up, &sv);
+		return -1;
+	}
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-2000000000------------------------ %d", ngx_pid);
+	ngx_xfdf_down_peer(&up, &sv); //down
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-2100000000------------------------ %d", ngx_pid);
+	idx = remove_up_srv(&up, &sv);
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-2------------------------ %d %d", ngx_pid, idx);
+	if( idx == -2 ) {
+		ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "no such rr peer error!!! [%V] [%V]", &up, &sv);
+	} else if( idx <= 0 ) {
+		ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "no such check peer error!!! [%V] [%V]", &up, &sv);
+	} else {
+		ngx_channel_msg *msg1;
+		//shm_peer
+		ngx_http_upstream_check_remove_shm_peer(idx);
+		//广播到其它进程执行删除任务
+		buf_sz = ngx_get_msg(&msg1,ngx_cycle->pool,s->data,s->len,up_srv_remove_msg_handler);
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "-2b----------------------- %d %d", ngx_pid, idx);
+		ngx_broadcast_processes(msg1,buf_sz,ngx_cycle->log, -1);
+		ngx_pfree(ngx_cycle->pool, msg1);
+		//
+		s->data = s->data + 7; // strlen("/remote") == 7
+		s->len = s->len - 7;
+		//清除消息
+		ngx_http_endpoint_item_shm_process_remove_directive((u_char*)shm_process->dus.up_srvs,
+							&shm_process->dus.count,
+							max_dyn_up_srv,
+							max_dyn_up_srv_len,
+							s, 1);
+	}
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-remove end------------------------ %d %V", ngx_pid, s);
+	return idx;
+}
+
+static ngx_int_t up_srv_main_remove_msg_handler(void *msg, ngx_str_t *emsg)
+{
+	ngx_channel_msg *m = msg;
+	ngx_str_t s;
+	s.data = (u_char*)m->data;
+	s.len = m->size;
+	emsg->data = (u_char*)"up_srv_main_remove_msg_handler";
+	emsg->len = strlen((char*)emsg->data);
+	return _up_srv_main_remove_msg_handler(&s);
+}
+
 #ifdef NGX_HTTP_WAF_MODULE
-static ngx_int_t waf_onoff_msg_handler(void *msg)
+static ngx_int_t waf_onoff_msg_handler(void *msg, ngx_str_t *emsg)
 {
 	ngx_channel_msg *m = msg;
 	ngx_http_waf_loc_conf_t *waf_cnf;
@@ -993,10 +1375,12 @@ static ngx_int_t waf_onoff_msg_handler(void *msg)
 	waf_cnf = wdata->waf_cnf;
 	v = *(ngx_int_t*)(&wdata->flag);
 	waf_cnf->waf = v;
+	emsg->data = (u_char*)"waf_onoff_msg_handler";
+	emsg->len = strlen((char*)emsg->data);
 	return NGX_OK;
 }
 
-static ngx_int_t waf_reload_msg_handler(void *msg)
+static ngx_int_t waf_reload_msg_handler(void *msg, ngx_str_t *emsg)
 {
 	ngx_channel_msg *m = msg;
 	ngx_http_waf_loc_conf_t *waf_cnf;
@@ -1006,10 +1390,12 @@ static ngx_int_t waf_reload_msg_handler(void *msg)
 	cnf.pool = NULL;//ngx_cycle->pool;
 	cnf.log = ngx_cycle->log;
 	cnf.conf_file = NULL;
+	emsg->data = (u_char*)"waf_reload_msg_handler";
+	emsg->len = strlen((char*)emsg->data);
 	return ngx_http_waf_reload(&cnf,waf_cnf,wdata->flag);
 }
 
-static ngx_int_t waf_reload_mode_handler(void *msg)
+static ngx_int_t waf_reload_mode_handler(void *msg, ngx_str_t *emsg)
 {
 	ngx_channel_msg *m = msg;
 	ngx_http_waf_loc_conf_t *waf_cnf;
@@ -1018,14 +1404,18 @@ static ngx_int_t waf_reload_mode_handler(void *msg)
 	ngx_str_t md;
 	md.data = (u_char*)wdata->flag;
 	md.len = strlen((char*)wdata->flag);
+	emsg->data = (u_char*)"waf_reload_mode_handler";
+	emsg->len = strlen((char*)emsg->data);
 	return ngx_http_waf_mode_reload(&md,1,waf_cnf);
 }
 #endif
 
 
-//将消息向所有子进程广播出去
+/* 将消息向所有子进程广播出去
+ * pos要发送到哪些指定进程的channel，占位表示法，-1表示所有(除了自身)
+ */
 ngx_int_t
-ngx_broadcast_processes(ngx_channel_msg *data, size_t size, ngx_log_t *log)
+ngx_broadcast_processes(ngx_channel_msg *data, size_t size, ngx_log_t *log, ngx_int_t pos)
 {
 	ssize_t             n;
 	ngx_err_t           err;
@@ -1072,14 +1462,29 @@ ngx_broadcast_processes(ngx_channel_msg *data, size_t size, ngx_log_t *log)
 	msg.msg_iov = iov;
 	msg.msg_iovlen = 1;
 
-	ngx_int_t i;
-	for( i = 0;i < ngx_chs->count ; i++) {
-		if( i != ngx_args.pos ) {
-			n = sendmsg(ngx_chs->chs[i].channel_pair[0], &msg, 0);
-			if (n == -1) {
-				err = ngx_errno;
-				ngx_log_error(NGX_LOG_ALERT, log, err, "ngx_broadcast_processes() failed");
+	ngx_int_t i, mask = 4294967295 ; //2^32
+	if( pos < 0 ){
+		for( i = 0; i < ngx_chs->count ; i++) {
+			if( i != ngx_args.pos ) {
+				n = sendmsg(ngx_chs->chs[i].channel_pair[0], &msg, 0);
+				if (n == -1) {
+					err = ngx_errno;
+					ngx_log_error(NGX_LOG_ALERT, log, err, "ngx_broadcast_processes() failed");
+				}
 			}
+		}
+	} else {
+		i = 0;
+		while( mask & pos ) {
+			if( (pos - (pos >> 1 << 1)) > 0 ){ //表示这一位的进程占位为1
+				n = sendmsg(ngx_chs->chs[i].channel_pair[0], &msg, 0);
+				if (n == -1) {
+					err = ngx_errno;
+					ngx_log_error(NGX_LOG_ALERT, log, err, "ngx_broadcast_processes() failed");
+				}
+			}
+			pos >>= 1;
+			i++;
 		}
 	}
 
@@ -1094,6 +1499,8 @@ ngx_endpoint_channel_handler(ngx_event_t *ev)
 	ngx_connection_t  *c;
 	ssize_t			n;
     ngx_err_t           err;
+    ngx_int_t			r;
+    ngx_str_t			emsg;
 
 	if (ev->timedout) {
 		ev->timedout = 0;
@@ -1146,8 +1553,8 @@ ngx_endpoint_channel_handler(ngx_event_t *ev)
 	if(data->cmd == CMD_PAYLOAD_SIZE) {//获得消息内容的尺寸
 		ngx_args.ngx_msg_size = data->size;
 	} else if(data->cmd == CMD_PROCESS ){//处理接收到的消息内容
-		if (data->handler(data) == NGX_ERROR) {
-			ngx_log_error(NGX_LOG_ERR, ev->log, 0, "ngx_endpoint_channel_handler data->handler() error, pid : %l ",ngx_pid);
+		if ( (r = data->handler(data, &emsg)) < NGX_OK) {
+			ngx_log_error(NGX_LOG_ALERT, ev->log, 0, "ngx_endpoint_channel_handler data->handler():%V error, pid : %l %d",&emsg, ngx_pid, r);
 		}
 	} else {
 		ngx_log_error(NGX_LOG_ERR, ev->log, 0, "ngx_endpoint_channel_handler has no command,pid : %l ",ngx_pid);
@@ -1216,6 +1623,8 @@ ngx_http_endpoint_init_process(ngx_cycle_t *cycle)
 {
 	if (ngx_process == NGX_PROCESS_WORKER) {
 		ngx_int_t ret;
+		ngx_str_t s;
+		ngx_uint_t i;
 		//partC
 		ngx_args.pos = ngx_worker; //ngx_process_slot%worker_processes;//当前work process的占位，ngx_process_slot是main在fork前给子进程安排的占位
 		ret = ngx_add_channel_event(cycle, ngx_chs->chs[ngx_args.pos].channel_pair[1], NGX_READ_EVENT, ngx_endpoint_channel_handler);//监听socket pair为1的套接字
@@ -1223,13 +1632,28 @@ ngx_http_endpoint_init_process(ngx_cycle_t *cycle)
 			ngx_http_endpoint_channel_task(cycle,&ngx_chs->chs[ngx_args.pos].ev);
 		}
 		//partB
-		ngx_str_t s;
 		//只会在 workprocess被kill掉时执行，reload的时候不会执行此部分，因为 shm_process->dns.count 为0, reload时不用shm_process->dns做旧数据还原
-		ngx_uint_t i;
 		for( i = 0 ; i < shm_process->dns.count ; i++) {
 			s.data = shm_process->dns.dns[i];
 			s.len = strlen((char*)shm_process->dns.dns[i]);
 			ngx_http_endpoint_reslove_dn(cycle->pool,&s);
+		}
+		//处理动态添加的 upstream中的server
+		ngx_str_t up, sv, swt, srg;
+		ngx_int_t idx;
+		for( i = 0 ; i < shm_process->dus.count ; i++) {
+			s.data = shm_process->dus.up_srvs[i];
+			s.len = strlen((char*)shm_process->dus.up_srvs[i]);
+			parse_up_srv_from_uri(&s, &up, &sv, &swt, &srg);
+			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-init add start------------------------ %d %V", ngx_pid, &sv);
+			idx = add_up_srv(&up, &sv, &swt, &srg);
+
+			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=5================ %d", ngx_pid);
+			//关联共享内存shm_peer, reload后应该取shm中的region weight
+			//reload后新增的peer，从shm中取rg wt,所以设两个无意义的参数"-1"后面会判断处理
+			ngx_http_upstream_check_add_shm_peer(idx, -1, -1);
+			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=6================ %d", ngx_pid);
+			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-init add end------------------------ %d %V", ngx_pid, &sv);
 		}
 		//重载有变化的waf
 #ifdef NGX_HTTP_WAF_MODULE

@@ -18,13 +18,13 @@ var_conf: 如果使用自定义变量(取值为0/1)则在此指令处理注册�
 一.列出所有upstream
 http://192.168.7.233:8100/list
     upstream store {
-        server 192.168.128.30:8085 name=0 weight=3 region=2 down=0 check_down=0
-        server 192.168.128.30:8086 name=1 weight=3 region=2 down=0 check_down=0
-        server 192.168.128.30:8087 name=2 weight=3 region=0 down=0 check_down=0
+        server 192.168.128.30:8085 name=0 weight=3 region=2 down=0 check_down=0 elastic=0
+        server 192.168.128.30:8086 name=1 weight=3 region=2 down=0 check_down=0 elastic=0
+        server 192.168.128.30:8087 name=2 weight=3 region=0 down=0 check_down=0 elastic=0
     }
     upstream store1 {
-        server 192.168.128.30:8083 name=0 weight=3 region=2 down=0 check_down=0
-        server 192.168.128.30:8084 name=1 weight=3 region=1 down=0 check_down=0
+        server 192.168.128.30:8083 name=0 weight=3 region=2 down=0 check_down=0 elastic=0
+        server 192.168.128.30:8084 name=1 weight=3 region=1 down=0 check_down=0 elastic=1
     }
 返回结果里，
     name:唯一名称，摘挂server使用此值
@@ -32,6 +32,7 @@ http://192.168.7.233:8100/list
     region:表示服务器所属分区，配合访问路由可用将指定访问路由到指定分区
     down:表示server的状态，nginx.conf里的down指令或curl down指令都可以设置此值，如果初始状态是down的情况，使用api up指令可以使服务器处于启动状态
     check_down:表示监听到后服务器不可用后将服务器自动摘掉,1为摘掉，0为启用
+    elastic:是否是动态添加的server，0表示不是，1表示是动态添加的
 
 二. 动态摘挂upstream的server，注意必须在配置文件的upstream中使用 xfdf_ip_hash(ngx_xfdf_ip_hash_module)
 #摘掉server /down/{upstream_name}/{server_name}
@@ -179,6 +180,8 @@ shopedi 2
 
 #重置upstream分区
 http://localhost:8100/region/[upstream]?conf=conf/include/region.cnf
+#重新设置某个peer的region
+http://localhost:8100/region/[upstream]/[name]/[region]
 #重置访问路由规则
 http://localhost:8100/router/[name]?conf=conf/include/router.cnf
 #获取指定名称路由规则的所有变量名及索引号
@@ -221,4 +224,6 @@ http://localhost:8100/waf/reloadmode/[name]/[mode]
 "!REFERER","CC", "!CC","ADV", "!ADV","STD", "!STD","STATIC", "!STATIC","DYNAMIC", "!DYNAMIC","FULL", "!FULL","CACHE", "!CACHE","LIB-INJECTION", 
 "!LIB-INJECTION","LIB-INJECTION-SQLI", "!LIB-INJECTION-SQLI","LIB-INJECTION-XSS", "!LIB-INJECTION-XSS"
 
-
+十.动态增减upstream下的server
+curl http://localhost:8100/add/[upstream]/[host]/[region]/[weight]
+curl http://localhost:8100/remove/[upstream]/[host] #只可以删除动态添加的server，原本配置文件里的server不能删除

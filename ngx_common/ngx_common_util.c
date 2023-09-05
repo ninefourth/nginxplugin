@@ -334,6 +334,15 @@ ngx_strcopy( ngx_pool_t *pool , ngx_str_t *str)
 }
 
 u_char*
+ngx_strcopy2( ngx_pool_t *pool , ngx_str_t *str)
+{
+	u_char *s;
+	s=ngx_palloc(pool,str->len);
+	ngx_memcpy(s,str->data,str->len);
+	return s;
+}
+
+u_char*
 ngx_strcat(u_char* des , u_char* src , size_t len)
 {
     ngx_memcpy(des, src, len);
@@ -363,7 +372,18 @@ ngx_int_t ngx_str_cmp3(char *v1 ,char *v2)
 	ret = ngx_strncmp( v1, v2, ngx_min(l1,l2) );
 	return (ret == 0) ? l1 - l2 : ret ;
 }
-
+ngx_int_t ngx_str_index_of_str(ngx_str_t *v1, ngx_str_t *v2)
+{
+	ngx_int_t p = -1;
+	u_char *c;
+	if(v1->len >= v2->len){
+		c = ngx_strstrn(v1->data, (char*)v2->data, v2->len - 1);
+		if(c != NULL) {
+			p = c - v1->data;
+		}
+	}
+	return p;
+}
 
 ngx_str_t *ngx_get_param_value(ngx_str_t *args , u_char *param , ngx_uint_t len , ngx_str_t *value)
 {
@@ -546,12 +566,17 @@ ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t 
 
 ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr)
 {
-	struct in_addr h_addr;
-	char *s;
-	h_addr.s_addr = naddr;
-	s = inet_ntoa(h_addr);
-	saddr->data = (u_char*)s;
-	saddr->len = strlen(s);
+	saddr->len = ngx_inet_ntop(AF_INET, &naddr, saddr->data, NGX_INET_ADDRSTRLEN);
+//	struct in_addr h_addr;
+//	char *s;
+//	u_char *p;
+//	h_addr.s_addr = naddr;
+
+//	p = (u_char*)&naddr;
+//	saddr->len = ngx_snprintf(saddr->data, NGX_INET_ADDRSTRLEN, "%ud.%ud.%ud.%ud", p[0],p[1],p[2],p[3]) - saddr->data;
+
+//	s = inet_ntoa(h_addr);
+//	saddr->data = (u_char*)s;
 	return saddr;
 }
 
@@ -603,6 +628,16 @@ ngx_create_socketpair(ngx_socket_t *st, ngx_int_t protol ,ngx_log_t *log)
 	return NGX_OK;
 }
 
+ngx_uint_t
+ngx_sockaddr_2_port(struct sockaddr *addr)
+{
+	ngx_uint_t pt;
+	pt = (u_char)addr->sa_data[0];
+	pt = pt << 8;
+	pt |= (u_char)addr->sa_data[1];
+	return pt;
+}
+
 u_char *ngx_sockaddr_2_str(ngx_pool_t *pool ,struct sockaddr *addr, ngx_str_t *port ,ngx_str_t *str_addr)
 {
 	u_char *s_p, s_tmp[4];
@@ -641,6 +676,40 @@ u_char *ngx_sockaddr_2_str(ngx_pool_t *pool ,struct sockaddr *addr, ngx_str_t *p
 	return buf_st;
 }
 
+char* ngx_str_host_2_chars(ngx_str_t *host, /*out*/char* bytehost)
+{
+	ngx_str_t ip, port, ip_num;
+	ngx_uint_t pt = 80;
+	u_char *tp;
+	ip.len = 0;
+	port.len = 0;
+	ngx_str_sch_last_trimtoken(host->data, host->len, ':', &ip, &port);
+	ngx_memzero(bytehost,14);
+	if( port.len > 0) {
+		pt = ngx_atoi(port.data, port.len);
+	}
+	//port
+	bytehost[0] = pt >> 8;
+	bytehost[1] = pt - (pt >> 8 << 8);
+	//
+	if( ip.len > 0){
+		for(ngx_uint_t i = 2; i < 6; i++){
+			tp = ngx_str_sch_next_trimtoken(ip.data, ip.len, '.', &ip_num);
+			bytehost[i] = (char)ngx_atoi(ip_num.data, ip_num.len);
+			ip.len = ip.len - (tp - ip.data);
+			ip.data = tp;
+		}
+	}
+	return bytehost;
+}
+
+/*
+ float的结构,共32位
+占位数 |  1bit    |    8bit    | 23bit
+索引   |   31    |   30...23   |  0
+意义   | 符号位  |   指数位   | 尾数位
+求对数，只对指数位求解就可以
+ */
 ngx_int_t ngx_math_log2(ngx_int_t x)
 {
     float fx;
@@ -650,7 +719,7 @@ ngx_int_t ngx_math_log2(ngx_int_t x)
     ix = *(ngx_int_t*)&fx;
     exp = (ix >> 23) & 0xff;//the bits of exponent
 
-    return exp - 126;
+    return exp - 126; // 2^7-1
 }
 
 ngx_uint_t ngx_math_pow(ngx_uint_t x , ngx_uint_t y)
@@ -1036,6 +1105,83 @@ ngx_shared_memory_find(ngx_cycle_t *cycle, ngx_str_t *name, void *tag)
         return &shm_zone[i];
     }
     return NULL;
+}
+
+void
+ngx_array_remove_by_index(ngx_array_t *a, ngx_uint_t idx, ngx_array_remove_item_ptr itemcb)
+{
+//	ngx_uint_t i ;
+//	void *des, *sor;
+	if( a->nelts > idx ) {
+		ngx_array_mem_move(a->elts, idx, idx + 1, a->size, a->nelts, itemcb);
+		a->nelts--;
+//		des = (void*)((uintptr_t)a->elts + idx * a->size);
+//		sor = (void*)((uintptr_t)a->elts + (idx+1) * a->size);
+//		ngx_memcpy(des, sor, (a->nelts - idx) * a->size);
+//		if( itemcb != NULL) {
+//			for( i = idx; i < a->nelts; i++ ) {
+//				itemcb(  (void*)((uintptr_t)a->elts + i * a->size), i );
+//			}
+//		}
+	}
+}
+
+void
+ngx_array_remove_by_item(ngx_array_t *a, void *item)
+{
+	ngx_uint_t i, sz;
+	void *it;
+	sz = a->nelts;
+	for( i = 0; i < sz; i++) {
+		it = (void*)((uintptr_t)a->elts + i * a->size);
+		if( it == item ) {
+			ngx_array_remove_by_index(a, i, NULL);
+			break;
+		}
+	}
+}
+
+void
+ngx_array_mem_move(void *ar, ngx_uint_t desidx, ngx_uint_t soridx, size_t sz, size_t len, ngx_array_remove_item_ptr itemcb )
+{
+	if( desidx < soridx) {
+		void *des, *sor, *temp;
+		ngx_uint_t i;
+		des = (void*)((uintptr_t)ar + desidx * sz);
+		sor = (void*)((uintptr_t)ar + soridx * sz);
+		len -= soridx;
+		temp = ngx_palloc(ngx_cycle->pool, sz * len);
+		ngx_memcpy(temp, sor, sz * len);
+		ngx_memcpy(des, temp, sz * len);
+//		ngx_memcpy(des, sor, sz * len);
+		ngx_pfree(ngx_cycle->pool, temp);
+		//
+		if( itemcb != NULL) {
+			for( i = desidx; i < len + desidx; i++ ) {
+				itemcb(  (void*)((uintptr_t)ar + i * sz), i );
+			}
+		}
+	}
+}
+
+void
+ngx_array_direct_mem_move(void *ar, ngx_uint_t desidx, ngx_uint_t soridx, size_t sz, size_t len, ngx_array_remove_item_ptr itemcb )
+{
+	if( desidx < soridx) {
+		void *des, *sor;
+		ngx_uint_t i;
+		des = (void*)((uintptr_t)ar + desidx * sz);
+		sor = (void*)((uintptr_t)ar + soridx * sz);
+		len -= soridx;
+		for( i = desidx; i < desidx + len; i++) {
+			ngx_memcpy(des, sor, sz);
+			if( itemcb != NULL) {
+				itemcb( des, i );
+			}
+			des = (void*)((uintptr_t)des + sz);
+			sor = (void*)((uintptr_t)sor + sz);
+		}
+	}
 }
 
 void ngx_pool_create(ngx_log_t *log)

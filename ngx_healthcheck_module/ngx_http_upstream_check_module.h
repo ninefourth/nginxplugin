@@ -10,8 +10,11 @@
 
 typedef volatile ngx_atomic_int_t  ngx_atomic_i_t;
 
-ngx_uint_t ngx_http_upstream_check_add_peer(ngx_conf_t *cf,
+ngx_int_t ngx_http_upstream_check_add_peer(ngx_conf_t *cf,
     ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr);
+
+void ngx_http_upstream_check_init_upstream(ngx_conf_t *cf,
+		ngx_http_upstream_rr_peers_t* peers, ngx_http_upstream_srv_conf_t *us);
 
 ngx_uint_t ngx_http_upstream_check_peer_down(void *p);
 
@@ -46,6 +49,15 @@ ngx_int_t ngx_get_router_variable_region(ngx_str_t *router_name , ngx_str_t *var
 ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc,ngx_str_t *val);
 ngx_buf_t *ngx_list_router_var(ngx_pool_t *pool, ngx_str_t *router_name );
 
+ngx_int_t ngx_http_upstream_check_add_check_peer(ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr);
+void ngx_http_upstream_check_add_shm_peer(ngx_uint_t index, ngx_int_t rg, ngx_int_t wt);
+//ngx_int_t ngx_http_upstream_check_remove_check_peer(ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr);
+void ngx_http_upstream_check_remove_shm_peer(ngx_uint_t index);
+//void ngx_http_upstream_check_add_peers_timers(ngx_uint_t index);
+ngx_int_t ngx_http_upstream_check_add_timers(ngx_cycle_t *cycle, ngx_uint_t idx, ngx_uint_t last_idx);
+ngx_int_t ngx_http_upstream_check_remove_check_peer(ngx_http_upstream_srv_conf_t *sconf, ngx_str_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr);
+
+void ngx_set_region(ngx_uint_t up_name_hash , ngx_str_t *server, ngx_uint_t region);
 
 #endif //_NGX_HTTP_UPSTREAM_CHECK_MODELE_H_INCLUDED_
 

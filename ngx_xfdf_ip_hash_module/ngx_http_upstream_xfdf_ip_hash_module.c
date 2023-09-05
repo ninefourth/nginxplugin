@@ -24,6 +24,7 @@ xfdf_ip_hash指令只有一个参数：
 #include <ngx_core.h>
 #include <ngx_http.h>
 #include "../ngx_common/ngx_common_util.h"
+#include "../ngx_http_endpoint_module/ngx_http_endpoint_module.h"
 
 #include "ngx_http_upstream_xfdf_ip_hash_module.h"
 
@@ -103,6 +104,10 @@ typedef struct {
 	ngx_msec_int_t					tm;
 } ngx_http_upstream_rr_ex_peer_data_t ;
 
+typedef struct {
+	//
+} ngx_http_upstream_xfdf_main_conf_t;
+
 static ngx_int_t ngx_http_upstream_init_ip_hash_peer(ngx_http_request_t *r,
     ngx_http_upstream_srv_conf_t *us);
 static ngx_int_t ngx_http_upstream_get_ip_hash_peer(ngx_peer_connection_t *pc,
@@ -126,9 +131,8 @@ static ngx_int_t ngx_http_upstream_init_rr_peer(ngx_http_request_t *r,
     ngx_http_upstream_srv_conf_t *us);
 static ngx_int_t ngx_http_upstream_get_rr_peer(ngx_peer_connection_t *pc,
     void *data);
-
-void *
-ngx_xfdf_deal_server_get_peer(ngx_http_upstream_rr_peer_t **fstp ,ngx_str_t *up , ngx_str_t *sr);
+static void *
+ngx_http_upstream_xfdf_main_conf(ngx_conf_t *cf);
 
 typedef struct {
     ngx_array_t  *codes;        /* uintptr_t */
@@ -166,8 +170,8 @@ static ngx_http_module_t  ngx_http_upstream_xfdf_ip_hash_module_ctx = {
     NULL,                                  /* preconfiguration */
 	NULL, //ngx_http_hash_var_init,            /* postconfiguration */
 
-    NULL,                                  /* create main configuration */
-    NULL,                                  /* init main configuration */
+	ngx_http_upstream_xfdf_main_conf,                                  /* create main configuration */
+	NULL,                                  /* init main configuration */
 
     ngx_http_upstream_xfdf_ip_hash_create_srv_conf,  /* create server configuration */
     NULL,                                  /* merge server configuration */
@@ -205,6 +209,7 @@ static ngx_str_t str_cd=ngx_string(" check_down=");
 static ngx_str_t str_nm=ngx_string(" name=");
 static ngx_str_t str_wt=ngx_string(" weight=");
 static ngx_str_t str_rg=ngx_string(" region=");
+static ngx_str_t str_es=ngx_string(" elastic=");
 static ngx_str_t str_rt=ngx_string("\n");
 static ngx_str_t str_st=ngx_string(" {\n");
 static ngx_str_t str_ed=ngx_string(" }\n");
@@ -319,33 +324,340 @@ ngx_http_upstream_ip_get_str(ngx_http_request_t *r, u_char **theip )
     return k;//return length of ip
 }
 
+ngx_http_upstream_xfdf_peer_t*
+ngx_xfdf_alloc_pool_peer(ngx_http_upstream_rr_peer_t *rr)
+{
+	size_t	i = xfdf_ups->freepos ;
+	ngx_http_upstream_xfdf_peer_t *peers = xfdf_ups->peers;
+	while( i < xfdf_ups->maxsize) {
+		if( peers[i].peer == NULL){
+			peers[i].index = i;
+			xfdf_ups->freepos = i;
+			break;
+		}
+		i++;
+	}
+	peers[i].peer = rr;
+	return &peers[i];
+}
+
+void
+ngx_xfdf_free_pool_peer(ngx_http_upstream_xfdf_peer_t *peer)
+{
+	size_t	i = 0, len, tlen;
+	u_char *nm, *tnm;
+	ngx_http_upstream_xfdf_peer_t *peers = xfdf_ups->peers, *p;
+
+	if (&peers[peer->index] == peer) {
+		i = peer->index;
+	}
+	//
+	nm = peer->name.data;
+	len = peer->name.len;
+	p = peer->next;
+	while (p != NULL) {
+		tnm = p->name.data;
+		tlen = p->name.len;
+		p->name.data = ngx_palloc(xfdf_ups->pool, len);
+		p->name.len = len;
+		ngx_memcpy(p->name.data, nm, len);
+		ngx_pfree(xfdf_ups->pool, nm);
+		nm = tnm;
+		len = tlen;
+		p = p->next;
+	}
+	ngx_pfree(xfdf_ups->pool, nm);
+	//
+	while( i < xfdf_ups->maxsize) {
+		if( &peers[i] == peer){
+			if(peer->prev != NULL){
+				peer->prev->next = peer->next;
+			}
+			if(peer->next != NULL){
+				peer->next->prev = peer->prev;
+			}
+			xfdf_ups->freepos = ngx_min(xfdf_ups->freepos, i);
+			ngx_memzero(peer, sizeof(ngx_http_upstream_xfdf_peer_t));
+			break;
+		}
+		i++;
+	}
+}
+
+ngx_http_upstream_srv_conf_t*
+ngx_xfdf_get_upstream_srv_conf(ngx_str_t *up)
+{
+	ngx_http_upstream_xfdf_up_t *ups;
+	size_t i;
+
+	if(xfdf_ups->upstreams != NULL){
+		ups = xfdf_ups->upstreams->elts;
+		for (i=0; i < xfdf_ups->upstreams->nelts; i++){
+			if (ngx_str_cmp(ups[i].name, up) == 0) {
+				return ups[i].us;
+			}
+		}
+	}
+	return NULL;
+}
+
 static void
-ngx_xfdf_init_upstream(ngx_pool_t *pool ,ngx_http_upstream_rr_peers_t* peers)
+ngx_xfdf_init_upstream(ngx_pool_t *pool ,ngx_http_upstream_rr_peers_t* peers, ngx_http_upstream_srv_conf_t *us)
 {
     ngx_http_upstream_xfdf_up_t *xupstream;
-    ngx_http_upstream_xfdf_peer_t *xpeer;
+    ngx_http_upstream_xfdf_peer_t *xpeer, *pxp, *xp;
     ngx_http_upstream_rr_peer_t *peer;
     size_t p ;
     
     xupstream = ngx_array_push(xfdf_ups->upstreams);
     
-    xupstream->peers = ngx_palloc(pool, sizeof(ngx_http_upstream_xfdf_peer_t)*peers->number);
+//    xupstream->peers = ngx_palloc(pool, sizeof(ngx_http_upstream_xfdf_peer_t)*peers->number);
+//    xupstream->peers = ngx_palloc(pool, sizeof(ngx_http_upstream_xfdf_peer_t) * reserv_peer_count);
     xupstream->name = peers->name;
+    xupstream->us = us;
     xupstream->num = 0;
+    xupstream->rr_peers = peers;
     
-    xpeer = xupstream->peers;
+    xpeer = pxp = xp = NULL;
     for (peer = peers->peer; peer; peer = peer->next) {
-        xupstream->peers->peer = peer;
-        
+    	xp = ngx_xfdf_alloc_pool_peer(peer);
+    	xp->prev = pxp;
+    	xp->next = NULL;
+    	if(pxp != NULL){
+    		pxp->next =xp;
+    	}
         p = ngx_num_bit_count(xupstream->num) ;
-        xupstream->peers->name.len = p;
-        xupstream->peers->name.data = ngx_palloc(pool, sizeof(u_char)*p);
-        ngx_sprintf(xupstream->peers->name.data,"%ui",xupstream->num);
+        xp->name.len = p;
+        xp->name.data = ngx_palloc(pool, sizeof(u_char)*p);
+        ngx_sprintf(xp->name.data,"%ui",xupstream->num);
+        xp->es = 0; //固定的peer，非弹性创建的
         xupstream->num++;
-
-        xupstream->peers++;
+        pxp = xp;
+        if(xpeer == NULL) {
+        	xpeer = xp;
+        }
     }
     xupstream->peers = xpeer;
+}
+
+ngx_http_upstream_xfdf_peer_t*
+ngx_xfdf_get_peer_by_name(ngx_str_t *name, ngx_http_upstream_xfdf_up_t *up)
+{
+	ngx_http_upstream_xfdf_peer_t *pr = up->peers;
+	while( pr != NULL) {
+		if( ngx_str_cmp(name, &pr->peer->name) == 0) {
+			break;
+		}
+		pr = pr->next;
+	}
+	return pr;
+}
+/*
+ngx_int_t
+ngx_xfdf_get_peer_index_by_name(ngx_str_t *name, ngx_http_upstream_xfdf_up_t *up)
+{
+	ngx_http_upstream_xfdf_peer_t *pr = up->peers;
+	ngx_uint_t i = 0;
+	for(; i < up->num; i++){
+		if( ngx_str_cmp(name, &pr[i].peer->name) == 0) {
+			return i;
+		}
+	}
+	return -1;
+}*/
+
+ngx_http_upstream_rr_peer_t*
+ngx_xfdf_add_upstream_peer(ngx_str_t *up, ngx_str_t* sr, ngx_int_t w)
+{
+	ngx_http_upstream_rr_peer_t 		*peer = NULL;
+	ngx_http_upstream_xfdf_up_t		*ups;
+	ngx_http_upstream_xfdf_peer_t	*pr;
+	ngx_uint_t i;
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "+a+++++++++++++++++++++ %d %V", ngx_pid, sr);
+	if(xfdf_ups->upstreams != NULL){
+		ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "+aa+++++++++++++++++++++ %d %V", ngx_pid, sr);
+		ups = xfdf_ups->upstreams->elts;
+		for (i=0; i < xfdf_ups->upstreams->nelts; i++){
+			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "+ab+++++++++++++++++++++ %d %V", ngx_pid, sr);
+			if (ngx_str_cmp(ups[i].name, up) == 0) {
+				ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "+a1+++++++++++++++++++++ %d %d", ngx_pid, ups[i].num);
+//				ngx_rwlock_wlock(&ups[i].lock);
+				if (ngx_xfdf_get_peer_by_name(sr, &ups[i]) == NULL) { //没有server说明是新增加
+					ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "+a2+++++++++++++++++++++ %d", ngx_pid);
+					peer = ngx_pcalloc(xfdf_ups->pool, sizeof(ngx_http_upstream_rr_peer_t));
+					peer->sockaddr = ngx_pcalloc(xfdf_ups->pool, sizeof(struct sockaddr));
+					ngx_str_host_2_chars(sr, peer->sockaddr->sa_data);
+					peer->sockaddr->sa_family = ups[i].peers->peer->sockaddr->sa_family;//取第一个的，因为值都一样
+					peer->socklen = ups[i].peers->peer->socklen;
+					peer->name.data = ngx_strcopy2(xfdf_ups->pool, sr);
+					peer->name.len = sr->len;
+					peer->server.data = ngx_strcopy2(xfdf_ups->pool, sr);
+					peer->server.len = sr->len;
+					peer->weight = w;
+					peer->effective_weight = w;
+					peer->current_weight = 0;
+					peer->max_conns = ups[i].peers->peer->max_conns;
+					peer->max_fails = ups[i].peers->peer->max_fails;
+					peer->fail_timeout = ups[i].peers->peer->fail_timeout;
+					peer->down = 0;
+					//
+					pr = ups[i].peers;
+					while( pr->next != NULL) {
+						pr = pr->next;
+					}
+					pr->next = ngx_xfdf_alloc_pool_peer(peer);
+					pr->next->prev = pr;
+					pr = pr->next;
+					//
+//					if( ups[i].num >= reserv_peer_count) { //如果超限需要动态扩容 +10
+//						/**TODO 判断不正确，待完善*/
+//						ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "---- peer exceed limit: more than %d! pid: %d",reserv_peer_count, ngx_pid);
+//						pr = ups[i].peers;
+//						ups[i].peers = ngx_palloc(xfdf_ups->pool, sizeof(ngx_http_upstream_xfdf_peer_t)*(ups[i].num+10));
+//						ngx_memcpy(ups[i].peers, pr, sizeof(ngx_http_upstream_xfdf_peer_t)*ups[i].num);
+//						ngx_pfree(xfdf_ups->pool, pr);
+//					}
+					pr->peer = peer;
+					pr->name.len = ngx_num_bit_count(ups[i].num);
+					pr->name.data = ngx_pcalloc(xfdf_ups->pool, ups[i].peers[ups[i].num].name.len);
+					ngx_int_to_str2(pr->name.data, ups[i].num);
+					pr->es = 1; //弹性创建的
+					ups[i].num++;
+					//
+//					rr_peer = ups[i].rr_peers->peer;
+//					while(rr_peer->next) {
+//						rr_peer = rr_peer->next;
+//					}
+//					rr_peer->next = peer;
+					ups[i].rr_peers->number++;
+					ups[i].rr_peers->total_weight+=w;
+					//
+//					ngx_rwlock_unlock(&ups[i].lock);
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+a3+++++++++++++++++++++ %d", ngx_pid);
+					break;
+				}
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+a4+++++++++++++++++++++ %d", ngx_pid);
+//				ngx_rwlock_unlock(&ups[i].lock);
+			}
+		}
+	}
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+a5+++++++++++++++++++++ %d", ngx_pid);
+	return peer;
+}
+
+void ngx_http_upstream_append_peer(ngx_str_t *up, ngx_http_upstream_rr_peer_t *peer)
+{
+	ngx_http_upstream_rr_peer_t		*rr_peer;
+	ngx_http_upstream_xfdf_up_t		*ups;
+	ngx_uint_t i;
+	if(xfdf_ups->upstreams != NULL) {
+		ups = xfdf_ups->upstreams->elts;
+		for (i=0; i < xfdf_ups->upstreams->nelts; i++) {
+			if (ngx_str_cmp(ups[i].name, up) == 0) {
+				rr_peer = ups[i].rr_peers->peer;
+				while(rr_peer->next) {
+					rr_peer = rr_peer->next;
+				}
+				rr_peer->next = peer;
+			}
+		}
+	}
+}
+/*
+void ngx_http_upstream_xfdf_remove_peer_index(void *p, ngx_uint_t idx)
+{
+	ngx_http_upstream_xfdf_peer_t *peer = p;
+	ngx_pfree(xfdf_ups->pool, peer->name.data);
+	peer->name.len = ngx_num_bit_count(idx);
+	peer->name.data = ngx_pcalloc(xfdf_ups->pool, peer->name.len);
+	ngx_int_to_str2(peer->name.data, idx);
+}*/
+
+ngx_int_t
+ngx_xfdf_upstream_peer_is_es(ngx_str_t *up, ngx_str_t* sr)
+{
+	ngx_http_upstream_xfdf_up_t		*ups;
+	ngx_http_upstream_xfdf_peer_t	*pr;
+	ngx_uint_t i;
+	if(xfdf_ups->upstreams != NULL) {
+		ups = xfdf_ups->upstreams->elts;
+		for (i = 0; i < xfdf_ups->upstreams->nelts; i++) {
+			if (ngx_str_cmp(ups[i].name, up) == 0) {
+				ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "+aaaaaaa+++++++++++++++++++++ %d %V", ngx_pid, sr);
+				pr = ngx_xfdf_get_peer_by_name(sr, &ups[i]);
+				ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "+abbbbbb+++++++++++++++++++++ %d %V %l", ngx_pid, sr, pr);
+				if( pr != NULL) {
+					return pr->es;
+				}
+				break;
+			}
+		}
+	}
+	return 0;
+}
+
+ngx_http_upstream_rr_peer_t*
+ngx_xfdf_remove_upstream_peer(ngx_str_t *up, ngx_str_t* sr)
+{
+	ngx_http_upstream_rr_peer_t 		*peer = NULL;
+	ngx_http_upstream_xfdf_up_t		*ups;
+	ngx_http_upstream_xfdf_peer_t	*pr;
+	ngx_uint_t i;
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+d+++++++++++++++++++++ %d", ngx_pid);
+	if(xfdf_ups->upstreams != NULL) {
+		ups = xfdf_ups->upstreams->elts;
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+d1+++++++++++++++++++++ %d", ngx_pid);
+		for (i = 0; i < xfdf_ups->upstreams->nelts; i++) {
+			if (ngx_str_cmp(ups[i].name, up) == 0) {
+				pr = ngx_xfdf_get_peer_by_name(sr, &ups[i]);
+				if( pr != NULL) {
+//					ngx_pfree(xfdf_ups->pool, pr->name.data);
+					peer = pr->peer;
+					ngx_http_upstream_remove_peer(up, peer); //rr
+					ups[i].num--;
+					ups[i].rr_peers->number--;
+					ups[i].rr_peers->total_weight -= peer->weight;
+					ngx_xfdf_free_pool_peer(pr);
+				}
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+d2+++++++++++++++++++++ %d", ngx_pid);
+//				ngx_rwlock_wlock(&ups[i].lock);
+//				ngx_rwlock_unlock(&ups[i].lock);
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+d9+++++++++++++++++++++ %d", ngx_pid);
+				break;
+			}
+		}
+	}
+//ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+d10+++++++++++++++++++++ %d", ngx_pid);
+	return peer;
+}
+
+void ngx_http_upstream_release_rr_peer(ngx_http_upstream_rr_peer_t *peer)
+{
+	ngx_pfree(xfdf_ups->pool, peer->server.data);
+	ngx_pfree(xfdf_ups->pool, peer->name.data);
+	ngx_pfree(xfdf_ups->pool, peer);
+}
+
+void ngx_http_upstream_remove_peer(ngx_str_t *up, ngx_http_upstream_rr_peer_t *peer)
+{
+	ngx_http_upstream_rr_peer_t		*rr_peer;
+	ngx_http_upstream_xfdf_up_t		*ups;
+	ngx_uint_t i;
+	if(xfdf_ups->upstreams != NULL) {
+		ups = xfdf_ups->upstreams->elts;
+		for (i=0; i < xfdf_ups->upstreams->nelts; i++) {
+			if (ngx_str_cmp(ups[i].name, up) == 0) {
+				rr_peer = ups[i].rr_peers->peer;
+				while(rr_peer && rr_peer->next != peer) {
+					rr_peer = rr_peer->next;
+				}
+				//删除 peer
+				if(rr_peer != NULL){
+					rr_peer->next = peer->next;
+				}
+			}
+		}
+	}
 }
 
 ngx_str_t*
@@ -354,7 +666,8 @@ ngx_xfdf_list_upstreams(ngx_pool_t *pool)
     ngx_str_t *str_ups;
     u_char *buf = NULL , *buf_st ;
     ngx_http_upstream_xfdf_up_t    *ups;
-    size_t i ,j,len = 0 ;
+    ngx_http_upstream_xfdf_peer_t	*xp;
+    size_t i, len = 0 ;
 
     if (xfdf_ups == NULL || xfdf_ups->upstreams == NULL ){
         return NULL;
@@ -367,48 +680,56 @@ ngx_xfdf_list_upstreams(ngx_pool_t *pool)
     ups = xfdf_ups->upstreams->elts;
     for (i=0; i<xfdf_ups->upstreams->nelts; i++){
         len += str_up.len + ups[i].name->len + str_st.len;
-        for (j=0; j < ups[i].num; j++) {
+//        ngx_rwlock_rlock(&ups[i].lock);
+        xp = ups[i].peers;
+        while(xp != NULL){
+//        for (j=0; j < ups[i].num; j++) {
         	char swt[4], srg[5]={'0',0,0,0,0};
             #if (NGX_HTTP_UPSTREAM_CHECK)
-			    sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer));
-			    sprintf(srg,"%lu",ngx_http_upstream_get_peer_region(ups[i].peers[j].peer));
+			    sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(xp->peer));
+			    sprintf(srg,"%lu",ngx_http_upstream_get_peer_region(xp->peer));
 		    #else
 			    sprintf(swt,"%lu",ups[i].peers[j].peer->weight);
 		    #endif
-            len += str_sr.len+ ups[i].peers[j].peer->server.len + 
-                   str_nm.len+ ups[i].peers[j].name.len +
+            len += str_sr.len+ xp->peer->server.len +
+                   str_nm.len+ xp->name.len +
 				   str_wt.len + strlen(swt) +
 				   str_rg.len + strlen(srg) +
                    str_dn.len+ 1 +
                    str_cd.len+ 1 +
+				   str_es.len+ 1 +
                    str_rt.len;
+            xp = xp->next;
         }
+//        ngx_rwlock_unlock(&ups[i].lock);
         len += str_ed.len;
     }
     if ( len > 0 ) {
 
-        buf_st = buf = ngx_palloc(pool, sizeof(u_char)*len );
-    
+        buf_st = buf = ngx_pcalloc(pool, sizeof(u_char)*len );
+
         for (i=0; i<xfdf_ups->upstreams->nelts; i++){
             buf = ngx_strcat(buf ,str_up.data ,str_up.len );
             buf = ngx_strcat(buf ,ups[i].name->data ,ups[i].name->len );
             buf = ngx_strcat(buf ,str_st.data ,str_st.len );
-            
-            for (j=0; j < ups[i].num; j++) {
+//            ngx_rwlock_rlock(&ups[i].lock);
+            xp = ups[i].peers;
+			while(xp != NULL){
+//            for (j=0; j < ups[i].num; j++) {
                 ngx_uint_t wtlen;
                 char swt[4] , srg[5]={'0',0,0,0,0};
                 #if (NGX_HTTP_UPSTREAM_CHECK)
-                    sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(ups[i].peers[j].peer));
-    			    sprintf(srg,"%lu",ngx_http_upstream_get_peer_region(ups[i].peers[j].peer));
+                    sprintf(swt,"%lu",ngx_http_upstream_get_peer_weight(xp->peer));
+    			    sprintf(srg,"%lu",ngx_http_upstream_get_peer_region(xp->peer));
                 #else
                     sprintf(swt,"%lu",ups[i].peers[j].peer->weight);
                 #endif
                 wtlen=strlen(swt);
                 buf = ngx_strcat(buf ,str_sr.data ,str_sr.len );
-                buf = ngx_strcat(buf ,ups[i].peers[j].peer->server.data ,ups[i].peers[j].peer->server.len );
+                buf = ngx_strcat(buf ,xp->peer->server.data, xp->peer->server.len );
                 buf = ngx_strcat(buf ,str_nm.data ,str_nm.len );
-                buf = ngx_strcat(buf ,ups[i].peers[j].name.data ,ups[i].peers[j].name.len );
-                buf = ngx_strcat(buf ,str_wt.data ,str_wt.len );
+                buf = ngx_strcat(buf ,xp->name.data, xp->name.len );
+                buf = ngx_strcat(buf, str_wt.data, str_wt.len );
                 ngx_sprintf(buf,"%s", swt );
                 buf += wtlen;
                 wtlen=strlen(srg);
@@ -417,7 +738,7 @@ ngx_xfdf_list_upstreams(ngx_pool_t *pool)
                 buf += wtlen;
                 buf = ngx_strcat(buf ,str_dn.data ,str_dn.len );
                 #if (NGX_HTTP_UPSTREAM_CHECK)
-                	ngx_sprintf(buf,"%ui", ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer));
+                	ngx_sprintf(buf,"%ui", ngx_http_upstream_check_peer_force_down(xp->peer));
 //                    ngx_sprintf(buf,"%ui", ups[i].peers[j].peer->down ? ups[i].peers[j].peer->down : ngx_http_upstream_check_peer_force_down(ups[i].peers[j].peer) );
                 #else
                     ngx_sprintf(buf,"%ui",ups[i].peers[j].peer->down);
@@ -425,14 +746,19 @@ ngx_xfdf_list_upstreams(ngx_pool_t *pool)
                 buf += 1;
                 buf = ngx_strcat(buf ,str_cd.data ,str_cd.len );
                 #if (NGX_HTTP_UPSTREAM_CHECK)
-                	ngx_sprintf(buf,"%ui", ngx_http_upstream_check_peer_down(ups[i].peers[j].peer));
+                	ngx_sprintf(buf,"%ui", ngx_http_upstream_check_peer_down(xp->peer));
                 #else
                     ngx_sprintf(buf,"%ui",0);
                 #endif
+				buf += 1;
+				buf = ngx_strcat(buf ,str_es.data ,str_es.len );
+				ngx_sprintf(buf,"%ui",xp->es);
                 buf += 1;
               //  buf+=(ups[i].peers[j].peer->down/10+1);
                 buf = ngx_strcat(buf ,str_rt.data ,str_rt.len );
+                xp = xp->next;
             }
+//            ngx_rwlock_unlock(&ups[i].lock);
             buf = ngx_strcat(buf ,str_ed.data ,str_ed.len );
         }
 
@@ -444,12 +770,46 @@ ngx_xfdf_list_upstreams(ngx_pool_t *pool)
 
 }
 
+void ngx_xfdf_down_peer(ngx_str_t *up , ngx_str_t *sr)
+{
+    ngx_http_upstream_xfdf_up_t    *ups;
+    ngx_http_upstream_rr_peer_t		*p = NULL;
+    ngx_http_upstream_xfdf_peer_t	*xp;
+    size_t i;
+
+    if (xfdf_ups->upstreams == NULL ){
+        goto tail ;
+    }
+    ups = xfdf_ups->upstreams->elts;
+    for (i=0; i<xfdf_ups->upstreams->nelts; i++){
+        if (ups[i].name->len == up->len && ngx_strncasecmp(ups[i].name->data, up->data, up->len) == 0) {
+        	xp = ups[i].peers;
+            while(xp != NULL) {
+            	if( ngx_str_cmp(&xp->peer->server, sr) == 0) {
+            		p = xp->peer;
+            		goto tail;
+            	}
+            	xp = xp->next;
+            }
+        }
+    }
+tail:
+    if(p != NULL) {
+	#if (NGX_HTTP_UPSTREAM_CHECK)
+		ngx_http_upstream_check_force_down_peer(p,1);
+	#else
+		p->down = dw;
+	#endif
+    }
+}
 
 void *
 ngx_xfdf_deal_server_get_peer(ngx_http_upstream_rr_peer_t **fstp, ngx_str_t *up , ngx_str_t *sr)
 {
     ngx_http_upstream_xfdf_up_t    *ups;
-    size_t i ,j;
+    ngx_http_upstream_rr_peer_t		*p;
+    ngx_http_upstream_xfdf_peer_t	*xp;
+    size_t i;
 
     if (xfdf_ups->upstreams == NULL ){
         return NULL;
@@ -459,14 +819,26 @@ ngx_xfdf_deal_server_get_peer(ngx_http_upstream_rr_peer_t **fstp, ngx_str_t *up 
     
     for (i=0; i<xfdf_ups->upstreams->nelts; i++){
         if (ups[i].name->len == up->len && ngx_strncasecmp(ups[i].name->data, up->data, up->len) == 0) {
+//        	ngx_rwlock_rlock(&ups[i].lock);
         	if (fstp != NULL){
         		*fstp  = ups[i].peers[0].peer;
         	}
-            for (j=0; j < ups[i].num; j++) {
-                if (ups[i].peers[j].name.len == sr->len && ngx_strncasecmp(ups[i].peers[j].name.data, sr->data, sr->len) == 0) {
-                    return ups[i].peers[j].peer;
-                }
+        	xp = ups[i].peers;
+//            for (j=0; j < ups[i].num; j++) {
+            while(xp != NULL) {
+//            	if( ngx_str_cmp(&xp->peer->server, sr) == 0) {
+            	if( ngx_str_cmp(&xp->name, sr) == 0) {
+            		p = xp->peer;
+            		return p;
+            	}
+            	xp = xp->next;
+//                if (ups[i].peers[j].name.len == sr->len && ngx_strncasecmp(ups[i].peers[j].name.data, sr->data, sr->len) == 0) {
+//                	p = ups[i].peers[j].peer;
+////                	ngx_rwlock_unlock(&ups[i].lock);
+//                    return p;
+//                }
             }
+//            ngx_rwlock_unlock(&ups[i].lock);
         }
     }
     return NULL;
@@ -507,7 +879,6 @@ ngx_http_upstream_rr_peer_t*
 ngx_upstream_region_peer(ngx_http_upstream_rr_peer_t *peer ,ngx_uint_t region)
 {
 	ngx_uint_t r = ngx_http_upstream_get_peer_region(peer);
-//	while( (r!=0 && region!=0 && r!= region) && !(r == 99 && region == 1)){//后半部的判断:当upstream的region为99时,region为1也匹配
 	while( (r!=0 && region!=0 && !(r & region) )){//区域互不包含
 		if(peer->next == NULL) {
 			break;
@@ -532,24 +903,26 @@ ngx_http_upstream_init_ip_hash(ngx_conf_t *cf, ngx_http_upstream_srv_conf_t *us)
     }
     peers = us->peer.data;
 
-    ngx_xfdf_init_upstream(cf->pool, peers);
+    ngx_xfdf_init_upstream(cf->pool, peers, us);
     //
     #if (NGX_HTTP_UPSTREAM_CHECK)
-        ngx_http_upstream_rr_peer_t        *peer;
-
-        for (peer = peers->peer; peer; peer = peer->next) {
-            ngx_http_upstream_check_add_peer(cf, us, peer);
-        }
-        //backup server
-        if ( (peers = peers->next) ) {
-            for (peer = peers->peer; peer; peer = peer->next) {
-                ngx_http_upstream_check_add_peer(cf, us, peer);
-            }
-        }
+    	if(peers != NULL) {
+    		ngx_http_upstream_check_init_upstream(cf, peers, us);
+    	}
+//        ngx_http_upstream_rr_peer_t        *peer;
+//
+//        for (peer = peers->peer; peer; peer = peer->next) {
+//            ngx_http_upstream_check_add_peer(cf, us, peer);
+//        }
+//        //backup server
+//        if ( (peers = peers->next) ) {
+//            for (peer = peers->peer; peer; peer = peer->next) {
+//                ngx_http_upstream_check_add_peer(cf, us, peer);
+//            }
+//        }
     #endif
     //
     us->peer.init = ngx_http_upstream_init_ip_hash_peer;
-    
 
     return NGX_OK;
 }
@@ -1064,14 +1437,19 @@ ngx_http_upstream_init_chash(ngx_conf_t *cf, ngx_http_upstream_srv_conf_t *us)
 
     points->number = 0;
 
-    ngx_xfdf_init_upstream(cf->pool, peers);
+    ngx_xfdf_init_upstream(cf->pool, peers, us);
 
+#if (NGX_HTTP_UPSTREAM_CHECK)
+    if(peers != NULL) {
+		ngx_http_upstream_check_init_upstream(cf, peers, us);
+	}
+#endif
     for (peer = peers->peer; peer; peer = peer->next) {
         server = &peer->server;
-
-        #if (NGX_HTTP_UPSTREAM_CHECK)
-            ngx_http_upstream_check_add_peer(cf, us, peer);
-        #endif
+//
+//        #if (NGX_HTTP_UPSTREAM_CHECK)
+//            ngx_http_upstream_check_add_peer(cf, us, peer);
+//        #endif
 
         /*
          * Hash expression is compatible with Cache::Memcached::Fast:
@@ -1418,20 +1796,23 @@ ngx_http_upstream_init_rr(ngx_conf_t *cf, ngx_http_upstream_srv_conf_t *us)
     }
     peers = us->peer.data;
 
-    ngx_xfdf_init_upstream(cf->pool, peers);
+    ngx_xfdf_init_upstream(cf->pool, peers, us);
     //
     #if (NGX_HTTP_UPSTREAM_CHECK)
-        ngx_http_upstream_rr_peer_t        *peer;
-
-        for (peer = peers->peer; peer; peer = peer->next) {
-            ngx_http_upstream_check_add_peer(cf, us, peer);
-        }
-        //backup server
-        if ( (peers = peers->next) ) {
-            for (peer = peers->peer; peer; peer = peer->next) {
-                ngx_http_upstream_check_add_peer(cf, us, peer);
-            }
-        }
+    	if(peers != NULL) {
+    		ngx_http_upstream_check_init_upstream(cf, peers, us);
+    	}
+//        ngx_http_upstream_rr_peer_t        *peer;
+//
+//        for (peer = peers->peer; peer; peer = peer->next) {
+//            ngx_http_upstream_check_add_peer(cf, us, peer);
+//        }
+//        //backup server
+//        if ( (peers = peers->next) ) {
+//            for (peer = peers->peer; peer; peer = peer->next) {
+//                ngx_http_upstream_check_add_peer(cf, us, peer);
+//            }
+//        }
     #endif
     //
     us->peer.init = ngx_http_upstream_init_rr_peer;
@@ -1798,10 +2179,6 @@ ngx_http_upstream_ip_hash(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     xfdfcf->remoteaddr_index = ngx_http_get_variable_index(cf, &strremote);
 
-    xfdf_ups = ngx_palloc(cf->pool, sizeof(ngx_http_upstream_xfdf_ups_t));
-    xfdf_ups->upstreams = ngx_array_create(cf->pool, 1, sizeof(ngx_http_upstream_xfdf_up_t));
-    xfdf_ups->pool = cf->pool;
-
     return NGX_CONF_OK;
 
 }
@@ -1851,4 +2228,23 @@ ngx_http_upstream_xfdf_ip_hash_create_srv_conf(ngx_conf_t *cf)
     xfdfcf->deep = 3;
 
     return xfdfcf;
+}
+
+static void *
+ngx_http_upstream_xfdf_main_conf(ngx_conf_t *cf)
+{
+	ngx_http_upstream_xfdf_main_conf_t *xfdf_cnf;
+	xfdf_cnf = ngx_pcalloc(cf->pool, sizeof(ngx_http_upstream_xfdf_main_conf_t));
+	if (xfdf_cnf == NULL) {
+		return NULL;
+	}
+
+	xfdf_ups = ngx_palloc(cf->pool, sizeof(ngx_http_upstream_xfdf_ups_t));
+	xfdf_ups->upstreams = ngx_array_create(cf->pool, 1, sizeof(ngx_http_upstream_xfdf_up_t));
+	xfdf_ups->peers = ngx_pcalloc(cf->pool, sizeof(ngx_http_upstream_xfdf_peer_t) * reserv_peer_count);
+	xfdf_ups->maxsize = reserv_peer_count;
+	xfdf_ups->freepos = 0;
+	xfdf_ups->pool = cf->pool;
+
+	return xfdf_cnf;
 }

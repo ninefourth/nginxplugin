@@ -5,6 +5,8 @@
 #define NGX_TRUE                  1
 #define NGX_FALSE                 0
 
+#define		reserv_peer_count	500
+
 /* binary tree */
 typedef struct ngx_binary_tree_node_s ngx_binary_tree_node_t;
 typedef ngx_int_t (*ngx_binary_tree_node_compare) (ngx_binary_tree_node_t *node1 , ngx_binary_tree_node_t *node2);
@@ -57,6 +59,7 @@ ngx_uint_t ngx_str_2_hash_evenly(u_char *s , size_t size);
 void cpy_chars(u_char *des , u_char *sor , size_t size);
 char *ngx_strcopy( ngx_pool_t *pool , ngx_str_t *str);
 u_char *ngx_strcat(u_char* des , u_char* src , size_t len);
+u_char *ngx_strcopy2( ngx_pool_t *pool , ngx_str_t *str);
 //以指定字符串开头
 ngx_int_t ngx_str_startwith(u_char *des , u_char *head , ngx_int_t len);
 ////token系列
@@ -74,6 +77,7 @@ ngx_int_t ngx_str_sch_last_trimtoken(u_char *s , size_t len, u_char c , ngx_str_
 ngx_int_t ngx_str_index_of(u_char *s , size_t len, u_char c ,ngx_uint_t begin);
 //字符串转数字
 ngx_int_t ngx_str_to_int(u_char *line, size_t n);
+//将u_char数组等同于 ngx_uint_t,如果强转会抛弃溢出字符
 ngx_uint_t ngx_char2uint(u_char* value,size_t len);
 //数字转字符串
 u_char *ngx_int_to_str(ngx_pool_t* pool,ngx_int_t num);
@@ -83,6 +87,8 @@ void ngx_int_to_str2(u_char* desc,ngx_int_t num);
 ngx_int_t ngx_str_cmp(ngx_str_t *v1 ,ngx_str_t *v2);
 ngx_int_t ngx_str_cmp2(ngx_str_t *v1 ,char *v2);
 ngx_int_t ngx_str_cmp3(char *v1 ,char *v2);
+//v2在v1中的位置，返回 -1 为不存在
+ngx_int_t ngx_str_index_of_str(ngx_str_t *v1, ngx_str_t *v2);
 //得到以\n或\0结尾字符串的长度，用于统计从文件中读出的一行有多少字符
 ngx_uint_t read_line(u_char *buf);
 //将地址以/为分隔符转成字符串数组
@@ -109,6 +115,8 @@ ngx_str_t *get_request_value(ngx_http_request_t *r , ngx_str_t *var , ngx_str_t 
 ngx_str_t *ngx_inet_ntoa(ngx_uint_t naddr , ngx_str_t *saddr);//将ip转成字符串
 ngx_int_t ngx_create_socketpair(ngx_socket_t *st, ngx_int_t protol ,ngx_log_t *log);//创建socket pair,一个用于读一个用于写
 u_char *ngx_sockaddr_2_str(ngx_pool_t *pool ,struct sockaddr *addr, ngx_str_t *port ,ngx_str_t *str_addr); //将sockaddr转换为字符串地址
+char* ngx_str_host_2_chars(ngx_str_t *host, /*out*/char* bytehost); //将地址字符串转为 char[14], 前2个byte是端口，后面4个byte是ip，剩下的byte保留没有作用
+ngx_uint_t ngx_sockaddr_2_port(struct sockaddr *addr);
 
 ////math
 ngx_int_t ngx_math_log2(ngx_int_t x); //以2为底的对数
@@ -125,4 +133,15 @@ size_t ngx_shm_estimate_size(size_t size);
 ngx_shm_zone_t *ngx_shm_zone_init(ngx_conf_t *cf, ngx_module_t *module ,ngx_str_t *name, size_t size, void *data,ngx_shm_zone_init_pt shm_zone_init);
 ngx_shm_zone_t *ngx_shared_memory_find(ngx_cycle_t *cycle, ngx_str_t *name, void *tag);
 
+////array
+typedef void (*ngx_array_remove_item_ptr) (void *p, ngx_uint_t idx);
+//删除数组中指定索引项
+void ngx_array_remove_by_index(ngx_array_t *a, ngx_uint_t idx, ngx_array_remove_item_ptr itemcb);
+//删除数组中指定项
+void ngx_array_remove_by_item(ngx_array_t *a, void *item);
+//将数组ar中指定索引位置soridx之后的元素移动到指定索引位置desidx后，soridx必须大于desidx; sz指一个元素的大小, len是数组的元素个数
+void ngx_array_mem_move(void *ar, ngx_uint_t desidx, ngx_uint_t soridx, size_t sz, size_t len, ngx_array_remove_item_ptr itemcb );
+//直接数组中内存拷贝，不需要中间变量。将数组ar中指定索引位置soridx之后的元素移动到指定索引位置desidx后，soridx必须大于desidx; sz指一个元素的大小, len是数组的元素个数
+void ngx_array_direct_mem_move(void *ar, ngx_uint_t desidx, ngx_uint_t soridx, size_t sz, size_t len, ngx_array_remove_item_ptr itemcb );
 void ngx_pool_create(ngx_log_t *log);
+

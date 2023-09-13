@@ -40,7 +40,7 @@ void ngx_xfdf_deal_peer_weight(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t w);
 ngx_http_variable_t* ngx_http_get_variable_by_name(ngx_conf_t *cf, ngx_str_t *name);
 void ngx_xfdf_down_peer(ngx_str_t *up , ngx_str_t *sr);
 
-ngx_http_upstream_rr_peer_t *ngx_xfdf_add_upstream_peer(ngx_str_t *up, ngx_str_t* sr, ngx_int_t w);
+ngx_http_upstream_rr_peer_t *ngx_xfdf_add_upstream_peer(ngx_str_t *up, ngx_str_t* sr, ngx_int_t w, ngx_int_t idx);
 ngx_http_upstream_srv_conf_t* ngx_xfdf_get_upstream_srv_conf(ngx_str_t *up);
 ngx_http_upstream_rr_peer_t* ngx_xfdf_remove_upstream_peer(ngx_str_t *up, ngx_str_t* sr);
 void ngx_http_upstream_append_peer(ngx_str_t *up, ngx_http_upstream_rr_peer_t *peer);

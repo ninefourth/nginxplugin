@@ -325,17 +325,23 @@ ngx_http_upstream_ip_get_str(ngx_http_request_t *r, u_char **theip )
 }
 
 ngx_http_upstream_xfdf_peer_t*
-ngx_xfdf_alloc_pool_peer(ngx_http_upstream_rr_peer_t *rr)
+ngx_xfdf_alloc_pool_peer(ngx_http_upstream_rr_peer_t *rr, ngx_int_t idx)
 {
 	size_t	i = xfdf_ups->freepos ;
 	ngx_http_upstream_xfdf_peer_t *peers = xfdf_ups->peers;
-	while( i < xfdf_ups->maxsize) {
-		if( peers[i].peer == NULL){
-			peers[i].index = i;
-			xfdf_ups->freepos = i;
-			break;
+	if (idx >= 0) {
+		i = idx;
+		peers[i].index = i;
+		xfdf_ups->freepos = ngx_min(i, xfdf_ups->freepos);
+	} else {
+		while( i < xfdf_ups->maxsize) {
+			if( peers[i].peer == NULL){
+				peers[i].index = i;
+				xfdf_ups->freepos = i;
+				break;
+			}
+			i++;
 		}
-		i++;
 	}
 	peers[i].peer = rr;
 	return &peers[i];
@@ -420,7 +426,7 @@ ngx_xfdf_init_upstream(ngx_pool_t *pool ,ngx_http_upstream_rr_peers_t* peers, ng
     
     xpeer = pxp = xp = NULL;
     for (peer = peers->peer; peer; peer = peer->next) {
-    	xp = ngx_xfdf_alloc_pool_peer(peer);
+    	xp = ngx_xfdf_alloc_pool_peer(peer, -1);
     	xp->prev = pxp;
     	xp->next = NULL;
     	if(pxp != NULL){
@@ -467,7 +473,7 @@ ngx_xfdf_get_peer_index_by_name(ngx_str_t *name, ngx_http_upstream_xfdf_up_t *up
 }*/
 
 ngx_http_upstream_rr_peer_t*
-ngx_xfdf_add_upstream_peer(ngx_str_t *up, ngx_str_t* sr, ngx_int_t w)
+ngx_xfdf_add_upstream_peer(ngx_str_t *up, ngx_str_t* sr, ngx_int_t w, ngx_int_t idx)
 {
 	ngx_http_upstream_rr_peer_t 		*peer = NULL;
 	ngx_http_upstream_xfdf_up_t		*ups;
@@ -505,7 +511,7 @@ ngx_xfdf_add_upstream_peer(ngx_str_t *up, ngx_str_t* sr, ngx_int_t w)
 					while( pr->next != NULL) {
 						pr = pr->next;
 					}
-					pr->next = ngx_xfdf_alloc_pool_peer(peer);
+					pr->next = ngx_xfdf_alloc_pool_peer(peer, idx);
 					pr->next->prev = pr;
 					pr = pr->next;
 					//

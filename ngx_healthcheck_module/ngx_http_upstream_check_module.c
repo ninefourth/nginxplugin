@@ -2072,17 +2072,22 @@ static ngx_int_t custom_variable_get_value(ngx_http_request_t *r, ngx_http_varia
 }
 
 ngx_http_upstream_check_peer_t*
-ngx_http_upstream_check_alloc_pool_peer(ngx_http_upstream_check_peers_t *peers, ngx_http_upstream_rr_peer_t *rr)
+ngx_http_upstream_check_alloc_pool_peer(ngx_http_upstream_check_peers_t *peers, ngx_http_upstream_rr_peer_t *rr, ngx_int_t idx)
 {
 	size_t	i = peers->freepos;
-	while( i < peers->maxsize) {
-		if( peers->peers[i].peer_mem_addr == NULL){
-			break;
+	if( idx >= 0) {
+		i = idx;
+		peers->freepos = ngx_min(i, peers->freepos);
+	} else {
+		while( i < peers->maxsize) {
+			if( peers->peers[i].peer_mem_addr == NULL){
+				peers->freepos = i;
+				break;
+			}
+			i++;
 		}
-		i++;
 	}
 	peers->peers[i].index = i;
-	peers->freepos = i;
 	peers->maxindex = ngx_max(i, peers->maxindex);
 	peers->peers[i].peer_mem_addr = rr;
 	return &peers->peers[i];
@@ -2273,7 +2278,7 @@ ngx_http_upstream_check_init_upstream(ngx_conf_t *cf, ngx_http_upstream_rr_peers
 			up->hash_upname = ngx_str_2_hash(peers->name);
 			pr = pp = p = NULL;
 			for (peer = peers->peer; peer; peer = peer->next) {
-				p = ngx_http_upstream_check_alloc_pool_peer(ucmcf->peers, peer);
+				p = ngx_http_upstream_check_alloc_pool_peer(ucmcf->peers, peer, -1);
 				ngx_http_upstream_check_init_peer(cf->pool, ucmcf, us, p); //rr index
 				p->prev = pp;
 				p->next = NULL;
@@ -2292,7 +2297,7 @@ ngx_http_upstream_check_init_upstream(ngx_conf_t *cf, ngx_http_upstream_rr_peers
 
 ngx_int_t
 ngx_http_upstream_check_add_peer_1(ngx_pool_t *pool, ngx_http_upstream_check_main_conf_t *ucmcf,
-		ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr)
+		ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr, ngx_int_t idx)
 {
 	ngx_http_upstream_check_up_t		*up;
 	ngx_http_upstream_check_peer_t	*upeer;
@@ -2320,7 +2325,7 @@ ngx_http_upstream_check_add_peer_1(ngx_pool_t *pool, ngx_http_upstream_check_mai
 
 	peers = ucmcf->peers;
 
- 	peer = ngx_http_upstream_check_alloc_pool_peer(peers, peer_mem_addr);
+ 	peer = ngx_http_upstream_check_alloc_pool_peer(peers, peer_mem_addr, idx);
 	peer->peer_addr = ngx_palloc(pool, sizeof(ngx_addr_t));
 	peer->conf = ucscf;
 	peer->upstream_name = &us->host;
@@ -2362,12 +2367,12 @@ ngx_http_upstream_check_add_peer_1(ngx_pool_t *pool, ngx_http_upstream_check_mai
 }
 
 ngx_int_t
-ngx_http_upstream_check_add_check_peer(ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr)
+ngx_http_upstream_check_add_check_peer(ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr, ngx_int_t idx)
 {
 	ngx_http_upstream_check_main_conf_t  *ucmcf;
 //ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+b1+++++++++++++++++++++ %d", ngx_pid);
 	ucmcf = ngx_ucmcf;//ngx_http_get_module_main_conf(r, ngx_http_upstream_check_module);
-	return ngx_http_upstream_check_add_peer_1(ucmcf->peers->pool, ucmcf, us, peer_mem_addr);
+	return ngx_http_upstream_check_add_peer_1(ucmcf->peers->pool, ucmcf, us, peer_mem_addr, idx);
 }
 
 ngx_int_t
@@ -2376,7 +2381,7 @@ ngx_http_upstream_check_add_peer(ngx_conf_t *cf,
 {
 	ngx_http_upstream_check_main_conf_t  *ucmcf;
     ucmcf = ngx_http_conf_get_module_main_conf(cf, ngx_http_upstream_check_module);
-	return ngx_http_upstream_check_add_peer_1(cf->pool, ucmcf, us, peer_mem_addr);
+	return ngx_http_upstream_check_add_peer_1(cf->pool, ucmcf, us, peer_mem_addr, -1);
 }
 
 static ngx_http_upstream_check_peer_t* 

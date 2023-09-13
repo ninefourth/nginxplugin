@@ -267,20 +267,24 @@ ngx_append(ngx_chain_t *p , ngx_chain_t *c)
  * size表示字符串数的最大数量
  * tl 表示字符串数组是每个字符串的最大长度
  * */
-void ngx_http_endpoint_item_shm_process_directive(/*out*/u_char *data, /*out*/size_t *sz, size_t size, size_t tl, ngx_str_t *s)
+u_char* ngx_http_endpoint_item_shm_process_directive(/*out*/u_char *data, /*out*/size_t *sz, size_t size, size_t tl, ngx_str_t *s)
 {
 	ngx_uint_t i;
+	u_char *ret = NULL;
 	for( i = 0; i < size ; i++, data+=sizeof(u_char)*tl ) {
 //		u_char *d = data;//shm_process->dns.dns[i];
 		if(data[0] == '\0') {
 			ngx_memcpy(data, s->data, s->len);
 			(*sz)++;
+			ret = data + s->len;
 			break;
 		}
 		if( ngx_str_cmp2(s,(char*)data) == 0){
+			ret = data + s->len;
 			break;
 		}
 	}
+	return ret;
 }
 
 //删除指定变量内容,fuzzy=1代表包含, =0代表等于
@@ -1177,9 +1181,9 @@ parse_up_srv_from_uri(ngx_str_t *s, /*out*/ngx_str_t *up, ngx_str_t *sv, ngx_str
 	ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 4, swt);
 }
 
-static ngx_int_t add_up_srv(ngx_str_t *up, ngx_str_t *sv, ngx_str_t *swt, ngx_str_t *srg)
+static ngx_int_t add_up_srv(ngx_str_t *up, ngx_str_t *sv, ngx_str_t *swt, ngx_str_t *srg, ngx_int_t idx)
 {
-	ngx_int_t wt,idx = -1;
+	ngx_int_t wt;
 	ngx_http_upstream_srv_conf_t *us;
 	ngx_http_upstream_rr_peer_t *p;
 
@@ -1187,11 +1191,11 @@ static ngx_int_t add_up_srv(ngx_str_t *up, ngx_str_t *sv, ngx_str_t *swt, ngx_st
 	wt = ngx_atoi(swt->data,swt->len); //weight
 	//新增peer
 	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=1================ %d", ngx_pid);
-	p = ngx_xfdf_add_upstream_peer(up,sv,wt);
+	p = ngx_xfdf_add_upstream_peer(up, sv, wt, idx);
 	if( p != NULL) {
 		us = ngx_xfdf_get_upstream_srv_conf(up);
 		ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=2================ %d", ngx_pid);
-		idx = ngx_http_upstream_check_add_check_peer(us, p);
+		idx = ngx_http_upstream_check_add_check_peer(us, p, idx);
 		ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=3================ %d", ngx_pid);
 		ngx_http_upstream_append_peer(up, p);
 	}
@@ -1208,7 +1212,7 @@ static ngx_int_t up_srv_add_msg_handler(void *msg, ngx_str_t *emsg)
 	s.len = m->size;
 	parse_up_srv_from_uri(&s, &up, &sv, &swt, &srg);
 	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-process add start------------------------ %d %V", ngx_pid, &sv);
-	idx = add_up_srv(&up, &sv, &swt, &srg);
+	idx = add_up_srv(&up, &sv, &swt, &srg, -1);
 	if( idx >= 0) {
 		ngx_http_upstream_check_add_timers((ngx_cycle_t*)ngx_cycle, idx, idx);
 	}
@@ -1222,11 +1226,12 @@ static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s)
 {
 	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-add start------------------------ %d %V", ngx_pid, s);
 	ngx_str_t up, sv, swt, srg;
-	ngx_int_t idx, rg, wt;
+	ngx_int_t idx, rg, wt ;
 	parse_up_srv_from_uri(s, &up, &sv, &swt, &srg);
-	if ( (idx = add_up_srv(&up, &sv, &swt, &srg)) >= 0 ) {
+	if ( (idx = add_up_srv(&up, &sv, &swt, &srg, -1)) >= 0 ) {
 		ngx_channel_msg *msg1;
 		size_t 	buf_sz = 0;
+		u_char	*ch;
 		//shm已经被0号进程设置，这里主要是加入定时检测
 		rg = ngx_atoi(srg.data,srg.len); //region
 		wt = ngx_atoi(swt.data,swt.len); //weight
@@ -1238,11 +1243,15 @@ static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s)
 		ngx_broadcast_processes(msg1,buf_sz,ngx_cycle->log, -1);
 		ngx_pfree(ngx_cycle->pool, msg1);
 
-		ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->dus.up_srvs,
+		ch = ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->dus.up_srvs,
 				&shm_process->dus.count,
 				max_dyn_up_srv,
 				max_dyn_up_srv_len,
 				s);
+		*ch = '/';
+		ch++;
+		*((ngx_int_t*)(ch)) = idx; //在shm里的占位
+//		*ch = idx;
 	}
 	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-add end------------------------ %d %V", ngx_pid, s);
 	return NGX_OK;
@@ -1639,15 +1648,17 @@ ngx_http_endpoint_init_process(ngx_cycle_t *cycle)
 			ngx_http_endpoint_reslove_dn(cycle->pool,&s);
 		}
 		//处理动态添加的 upstream中的server
-		ngx_str_t up, sv, swt, srg;
+		ngx_str_t up, sv, swt, srg, sidx;
 		ngx_int_t idx;
 		for( i = 0 ; i < shm_process->dus.count ; i++) {
 			s.data = shm_process->dus.up_srvs[i];
 			s.len = strlen((char*)shm_process->dus.up_srvs[i]);
 			parse_up_srv_from_uri(&s, &up, &sv, &swt, &srg);
+			ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 5, &sidx);
+//			idx = sidx.data[0];
+			idx = *((ngx_int_t*)sidx.data); //得到之前的索引位
 			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-init add start------------------------ %d %V", ngx_pid, &sv);
-			idx = add_up_srv(&up, &sv, &swt, &srg);
-
+			idx = add_up_srv(&up, &sv, &swt, &srg, idx);
 			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=5================ %d", ngx_pid);
 			//关联共享内存shm_peer, reload后应该取shm中的region weight
 			//reload后新增的peer，从shm中取rg wt,所以设两个无意义的参数"-1"后面会判断处理

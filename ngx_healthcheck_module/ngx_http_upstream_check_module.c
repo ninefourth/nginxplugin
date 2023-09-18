@@ -716,7 +716,7 @@ static ngx_command_t  ngx_http_upstream_check_commands[] = {
 	   NULL },
 
 	 { ngx_string("router"),
-		NGX_HTTP_LOC_CONF|NGX_CONF_TAKE12,
+		NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF|NGX_CONF_TAKE12,
 		ngx_http_location_router,
 		0,
 		0,
@@ -5936,7 +5936,7 @@ ngx_http_upstream_check_init_shm(ngx_conf_t *cf, void *conf)
     ngx_http_upstream_check_main_conf_t  *ucmcf = conf;
     ngx_http_upstream_check_peer_t      *peer;
 
-    if (ucmcf->peers != NULL) {
+    if (ucmcf->peers != NULL && ucmcf->peers->ups.nelts > 0) {
 
         ngx_http_upstream_check_shm_generation++;
 

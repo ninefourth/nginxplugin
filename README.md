@@ -1,3 +1,22 @@
+http  {/* NGX_HTTP_MAIN_CONF */
+     upstream test {/* NGX_HTTP_UPS_CONF */
+          ...
+     }
+     server {/* NGX_HTTP_SRV_CONF */
+           if (...) {/* NGX_HTTP_SIF_CONF */
+               ...
+           }
+           location / {/* NGX_HTTP_LOC_CONF */
+                 limit_except  GET {/* NGX_HTTP_LMT_CONF */
+                        ...
+                 }
+                 if (...) {/* NGX_HTTP_LIF_CONF */
+                     ...
+                 }
+           }
+     }
+}
+
 ##nginx插件##
 - ngx_healthcheck_module　检测upstream server
 - ngx_xfdf_ip_hash_module upstream使用客户端 x-forwarded-for首ip做hash

@@ -6,6 +6,9 @@
 #include <ngx_core.h>
 #include <ngx_http.h>
 
+//static void update_dyn_up_srv_dw(ngx_str_t *up, ngx_str_t *sr, ngx_int_t a);
+//static void update_dyn_up_srv_fdw(ngx_str_t *up, ngx_str_t *sr, ngx_int_t a);
+
 ngx_int_t is_debug_log();
 
 #define ngx_log_debug_process(level, log, ...)                                        \

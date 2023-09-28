@@ -867,6 +867,18 @@ ngx_xfdf_deal_server(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t dw)
     }
 }
 
+ngx_str_t*
+ngx_xfdf_peer_server(ngx_str_t *up , ngx_str_t *sr)
+{
+	ngx_http_upstream_rr_peer_t *p;
+	ngx_str_t *snm = NULL;
+	p = ngx_xfdf_deal_server_get_peer(NULL, up, sr);
+	if(p != NULL) {
+		snm = &p->server;
+	}
+	return snm;
+}
+
 void
 ngx_xfdf_deal_peer_weight(ngx_str_t *up , ngx_str_t *sr ,ngx_int_t w)
 {

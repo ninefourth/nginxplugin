@@ -124,6 +124,9 @@ static ngx_int_t remove_up_srv(ngx_str_t *up, ngx_str_t *sv);
 static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s);
 static ngx_int_t _up_srv_main_remove_msg_handler(ngx_str_t *s);
 
+static void update_dyn_up_srv_wt(ngx_str_t *up, ngx_str_t *sr, ngx_int_t w);
+static void update_dyn_up_srv_rg(ngx_str_t *up, ngx_str_t *sr, ngx_int_t r);
+
 #ifdef NGX_HTTP_REQUEST_LOG
 static ngx_int_t request_log_msg_handler(void *msg, ngx_str_t *emsg);//请求日志的回调
 static ngx_int_t request_log_disable_handler(void *msg, ngx_str_t *emsg);//关闭日志的回调
@@ -175,6 +178,13 @@ typedef struct {
 	size_t			count;
 }waf_modes;
 typedef struct {
+    ngx_shmtx_t                              mutex;
+#if (nginx_version >= 1002000)
+    ngx_shmtx_sh_t                           lock;
+#else
+    ngx_atomic_t                             lock;
+#endif
+    u_short			loaded;
 	u_char			up_srvs[max_dyn_up_srv][max_dyn_up_srv_len];
 	size_t			count;
 }dyn_up_srvs;
@@ -184,7 +194,7 @@ typedef struct {
 	waf_items		wfs; //waf的各项, 指令/waf/reload/[name]/ipv4 ，kill后的重加载
 	waf_onff			ws; //waf的开关
 	waf_modes		wfms; //waf_mode的重载 /waf/reloadmode/!STD
-	dyn_up_srvs		dus; //动态添加 upstream/server
+	dyn_up_srvs		dus; //动态添加 /[upstream]/[server]/[region]/[weight]/[check_down]/[force_down]
 	ngx_atomic_t		debug_log; //是否输出调试日志
 } ngx_endpoint_shm_t;
 
@@ -247,6 +257,16 @@ ngx_http_out_content( ngx_pool_t *pool, ngx_str_t *val, ngx_chain_t *out, ngx_ui
 			out->next = NULL;
 		}
 	}
+	return len;
+}
+
+static size_t
+ngx_http_chain_content(ngx_buf_t *buf, ngx_chain_t *out)
+{
+	size_t len = ngx_buf_size(buf);
+	out->buf = buf;
+	buf->last_buf = 1;
+	out->next = NULL;
 	return len;
 }
 
@@ -482,6 +502,7 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     ngx_chain_t                out;
     ngx_str_t                  *value, errmsg;
 	size_t					buf_sz = 0;
+	ngx_buf_t	 				*buf;
 
     rc = ngx_http_discard_request_body(r);
     if (rc != NGX_OK) {
@@ -583,6 +604,8 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 				goto tail;
 			}
             ngx_xfdf_deal_peer_weight(up,sr,(ngx_uint_t)w);
+            sr = ngx_xfdf_peer_server(up, sr); //
+            update_dyn_up_srv_wt(up, sr, w);
             buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
         }
 #endif
@@ -633,6 +656,8 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
 			p = ngx_xfdf_deal_server_get_peer(NULL, upstream, srnm);
 			if( p != NULL){
 				ngx_set_region(ngx_str_2_hash(upstream), &p->server, rg);
+				srnm = ngx_xfdf_peer_server(upstream, srnm); //
+				update_dyn_up_srv_rg(upstream, srnm, rg);
 				buf_sz = ngx_http_out_content(r->pool,&sucs,&out,1);
 			}
     	}
@@ -652,7 +677,8 @@ ngx_http_endpoint_do_get(ngx_http_request_t *r, ngx_array_t *resource)
     		ngx_str_t *router_name = &value[1]; //router name
     		if( value[2].len == 9 && ngx_strncasecmp(value[2].data, (u_char *)"variables", 9) == 0
     			&& value[3].len == 4 && ngx_strncasecmp(value[3].data, (u_char *)"list", 4) == 0 ){// /router/[name]/variables/list
-    			buf_sz = ngx_http_out_content(r->pool,router_name,&out,1);
+    			buf = ngx_list_router_var(r->pool,router_name);
+    			buf_sz = ngx_http_chain_content(buf, &out);
     		} else if( value[2].len == 3 && ngx_strncasecmp(value[2].data, (u_char *)"add", 3) == 0){
     			ngx_str_t *v = &value[3];
     			ngx_set_router_variable(r->pool ,router_name,v);
@@ -1203,22 +1229,106 @@ static ngx_int_t add_up_srv(ngx_str_t *up, ngx_str_t *sv, ngx_str_t *swt, ngx_st
 	return idx;
 }
 
-static ngx_int_t up_srv_add_msg_handler(void *msg, ngx_str_t *emsg)
+static ngx_int_t _up_srv_add_msg_handler(ngx_str_t *s)
 {
-	ngx_channel_msg *m = msg;
-	ngx_str_t s, up, sv, swt, srg;
+	ngx_str_t up, sv, swt, srg;
 	ngx_int_t idx;
-	s.data = (u_char*)m->data;
-	s.len = m->size;
-	parse_up_srv_from_uri(&s, &up, &sv, &swt, &srg);
+	parse_up_srv_from_uri(s, &up, &sv, &swt, &srg);
 	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-process add start------------------------ %d %V", ngx_pid, &sv);
 	idx = add_up_srv(&up, &sv, &swt, &srg, -1);
 	if( idx >= 0) {
 		ngx_http_upstream_check_add_timers((ngx_cycle_t*)ngx_cycle, idx, idx);
 	}
+	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-process add end------------------------ %d %V", ngx_pid, &sv);
+	return idx;
+}
+
+static ngx_str_t* get_dyn_up_srv(ngx_str_t *s, ngx_str_t *up, ngx_str_t *sr)
+{
+	ngx_uint_t i;
+	ngx_str_t sup, ssr;
+	for( i = 0 ; i < shm_process->dus.count ; i++) {
+		s->data = shm_process->dus.up_srvs[i];
+		s->len = strlen((char*)shm_process->dus.up_srvs[i]);
+		ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 1, &sup);
+		ngx_str_sch_idx_trimtoken(s->data, s->len, '/', 2, &ssr);
+		if (ngx_str_cmp(&sup, up) == 0 && ngx_str_cmp(&ssr, sr) == 0) {
+			return s;
+		}
+	}
+	s->len = 0;
+	return s;
+}
+
+//static void update_dyn_up_srv_arg(ngx_str_t *up, ngx_str_t *sr, ngx_str_t *ar, ngx_int_t pos)
+//{
+//	ngx_str_t s, ts;
+//	size_t ct;
+//	get_dyn_up_srv(&s, up, sr);
+//	if (s.len > 0) {
+//		ct =
+//		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', pos, &ts);
+//
+//	}
+//}
+
+static void update_dyn_up_srv_wt(ngx_str_t *up, ngx_str_t *sr, ngx_int_t w)
+{
+	ngx_str_t s, srg, swt;
+	get_dyn_up_srv(&s, up, sr);
+	if( s.len > 0) {
+		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 3, &srg);
+		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 4, &swt);
+		ngx_memzero(swt.data, swt.len);
+		ngx_int_to_str2(swt.data, w);
+	}
+}
+
+static void update_dyn_up_srv_rg(ngx_str_t *up, ngx_str_t *sr, ngx_int_t r)
+{
+	ngx_str_t s, srg, swt;
+	ngx_int_t wt;
+	u_char *ds;
+	get_dyn_up_srv(&s, up, sr);
+	if( s.len > 0) {
+		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 3, &srg);
+		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 4, &swt);
+		wt = ngx_str_to_int(swt.data, swt.len);
+		ngx_memzero(srg.data, srg.len+swt.len+1);
+		ds = srg.data;
+		ngx_int_to_str2(ds, r);
+		ds += ngx_num_bit_count(r);
+		ds = ngx_strcat(ds, (u_char*)"/", 1);
+		ngx_int_to_str2(ds, wt);
+	}
+}
+
+//static void update_dyn_up_srv_dw(ngx_str_t *up, ngx_str_t *sr, ngx_int_t a)
+//{
+//	ngx_str_t s, srg, swt;
+//	ngx_int_t wt;
+//	u_char *ds;
+//	get_dyn_up_srv(&s, up, sr);
+//}
+//
+//static void update_dyn_up_srv_fdw(ngx_str_t *up, ngx_str_t *sr, ngx_int_t a)
+//{
+//	ngx_str_t s, srg, swt;
+//	ngx_int_t wt;
+//	u_char *ds;
+//	get_dyn_up_srv(&s, up, sr);
+//}
+
+static ngx_int_t up_srv_add_msg_handler(void *msg, ngx_str_t *emsg)
+{
+	ngx_channel_msg *m = msg;
+	ngx_str_t s;
+	ngx_int_t idx;
+	s.data = (u_char*)m->data;
+	s.len = m->size;
+	idx = _up_srv_add_msg_handler(&s);
 	emsg->data = (u_char*)"up_srv_add_msg_handler";
 	emsg->len = strlen((char*)emsg->data);
-	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-process add end------------------------ %d %V", ngx_pid, &sv);
 	return idx;
 }
 
@@ -1231,7 +1341,7 @@ static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s)
 	if ( (idx = add_up_srv(&up, &sv, &swt, &srg, -1)) >= 0 ) {
 		ngx_channel_msg *msg1;
 		size_t 	buf_sz = 0;
-		u_char	*ch;
+//		u_char	*ch;
 		//shm已经被0号进程设置，这里主要是加入定时检测
 		rg = ngx_atoi(srg.data,srg.len); //region
 		wt = ngx_atoi(swt.data,swt.len); //weight
@@ -1243,15 +1353,15 @@ static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s)
 		ngx_broadcast_processes(msg1,buf_sz,ngx_cycle->log, -1);
 		ngx_pfree(ngx_cycle->pool, msg1);
 
-		ch = ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->dus.up_srvs,
-				&shm_process->dus.count,
-				max_dyn_up_srv,
-				max_dyn_up_srv_len,
-				s);
-		*ch = '/';
-		ch++;
-		*((ngx_int_t*)(ch)) = idx; //在shm里的占位
-//		*ch = idx;
+//		ch =
+		ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->dus.up_srvs,
+			&shm_process->dus.count,
+			max_dyn_up_srv,
+			max_dyn_up_srv_len,
+			s);
+//		*ch = '/';
+//		ch++;
+//		*((ngx_int_t*)(ch)) = idx; //在shm里的占位
 	}
 	ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-add end------------------------ %d %V", ngx_pid, s);
 	return NGX_OK;
@@ -1598,7 +1708,17 @@ ngx_http_endpoint_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
 		}
 		ngx_memzero(shm_chs, size);
 		shm_process = shm_chs; //
+		//
+		#if (nginx_version >= 1002000)
+			if (ngx_shmtx_create(&shm_process->dus.mutex, &shm_process->dus.lock, NULL) != NGX_OK)
+		#else
+			if (ngx_shmtx_create(&shm_process->dus.mutex, (void *) &shm_process->dus.lock, NULL) != NGX_OK)
+		#endif
+			{
+				return NGX_ERROR;
+			}
 	}
+	shm_process->dus.loaded = 0;
 	return NGX_OK;
 }
 
@@ -1648,24 +1768,38 @@ ngx_http_endpoint_init_process(ngx_cycle_t *cycle)
 			ngx_http_endpoint_reslove_dn(cycle->pool,&s);
 		}
 		//处理动态添加的 upstream中的server
-		ngx_str_t up, sv, swt, srg, sidx;
-		ngx_int_t idx;
+		ngx_str_t up, sv, swt, srg; //, sidx;
+		ngx_int_t idx, rg, wt;
+		ngx_shmtx_lock(&shm_process->dus.mutex);
 		for( i = 0 ; i < shm_process->dus.count ; i++) {
 			s.data = shm_process->dus.up_srvs[i];
 			s.len = strlen((char*)shm_process->dus.up_srvs[i]);
 			parse_up_srv_from_uri(&s, &up, &sv, &swt, &srg);
-			ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 5, &sidx);
-//			idx = sidx.data[0];
-			idx = *((ngx_int_t*)sidx.data); //得到之前的索引位
-			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-init add start------------------------ %d %V", ngx_pid, &sv);
-			idx = add_up_srv(&up, &sv, &swt, &srg, idx);
-			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=5================ %d", ngx_pid);
-			//关联共享内存shm_peer, reload后应该取shm中的region weight
-			//reload后新增的peer，从shm中取rg wt,所以设两个无意义的参数"-1"后面会判断处理
-			ngx_http_upstream_check_add_shm_peer(idx, -1, -1);
-			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=6================ %d", ngx_pid);
-			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-init add end------------------------ %d %V", ngx_pid, &sv);
+			idx = add_up_srv(&up, &sv, &swt, &srg, -1);
+			if( idx >= 0) {
+				if(shm_process->dus.loaded == 0) {
+					rg = ngx_atoi(srg.data,srg.len); //region
+					wt = ngx_atoi(swt.data,swt.len); //weight
+					ngx_http_upstream_check_add_shm_peer(idx, rg, wt);
+				} else {
+					ngx_http_upstream_check_add_timers((ngx_cycle_t*)ngx_cycle, idx, idx);
+				}
+			}
+//			parse_up_srv_from_uri(&s, &up, &sv, &swt, &srg);
+//			ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 5, &sidx);
+////			idx = sidx.data[0];
+//			idx = *((ngx_int_t*)sidx.data); //得到之前的索引位
+//			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-init add start------------------------ %d %V", ngx_pid, &sv);
+//			idx = add_up_srv(&up, &sv, &swt, &srg, idx);
+//			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=5================ %d", ngx_pid);
+//			//关联共享内存shm_peer, reload后应该取shm中的region weight
+//			//reload后新增的peer，从shm中取rg wt,所以设两个无意义的参数"-1"后面会判断处理
+//			ngx_http_upstream_check_add_shm_peer(idx, -1, -1);
+//			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "=6================ %d", ngx_pid);
+//			ngx_log_debug_process(NGX_LOG_ERR, ngx_cycle->log, 0, "-init add end------------------------ %d %V", ngx_pid, &sv);
 		}
+		shm_process->dus.loaded = 1;
+		ngx_shmtx_unlock(&shm_process->dus.mutex);
 		//重载有变化的waf
 #ifdef NGX_HTTP_WAF_MODULE
 		if(shm_process->wfs.count > 0) {

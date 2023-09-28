@@ -47,6 +47,7 @@ void ngx_http_upstream_append_peer(ngx_str_t *up, ngx_http_upstream_rr_peer_t *p
 void ngx_http_upstream_remove_peer(ngx_str_t *up, ngx_http_upstream_rr_peer_t *peer);
 void ngx_http_upstream_release_rr_peer(ngx_http_upstream_rr_peer_t *peer);
 ngx_int_t ngx_xfdf_upstream_peer_is_es(ngx_str_t *up, ngx_str_t* sr);
+ngx_str_t* ngx_xfdf_peer_server(ngx_str_t *up , ngx_str_t *sr);
 
 void* ngx_xfdf_deal_server_get_peer(ngx_http_upstream_rr_peer_t **fstp ,ngx_str_t *up , ngx_str_t *sr);
 #endif //_NGX_HTTP_UPSTREAM_XFDF_IP_HASH_MODELE_H_INCLUDED_

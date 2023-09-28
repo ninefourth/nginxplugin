@@ -1361,7 +1361,7 @@ void ngx_reload_router(ngx_pool_t *pool,ngx_str_t *name , ngx_str_t *cnf)
 		ngx_uint_t i;
 		for(i=0;i<loc_cnfs.count;i++){
 			if ( name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == name->len &&
-					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, name, name->len) ){
+					!ngx_strncmp(loc_cnfs.loc_confs[i]->router_name.data, name->data, name->len) ){
 				if(pool == NULL){
 					loc_cnfs.loc_confs[i]->conf.data = cnf->data;
 				}else {
@@ -1532,7 +1532,7 @@ void ngx_add_router_item(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_uint_t i
 		ngx_uint_t i_tpl;
 		for(i=0;i<loc_cnfs.count;i++){
 			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
-					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
+					!ngx_strncmp(loc_cnfs.loc_confs[i]->router_name.data, router_name->data, router_name->len) ){
 				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
 				if(krc == NULL || krc->count_variables <= idx) return ;
 
@@ -1592,7 +1592,7 @@ void ngx_set_router_variable(ngx_pool_t *pool ,ngx_str_t *router_name , ngx_str_
 		ngx_str_t val_tmp;
 		for(i=0;i<loc_cnfs.count;i++){
 			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
-					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
+					!ngx_strncmp(loc_cnfs.loc_confs[i]->router_name.data, router_name->data, router_name->len) ){
 				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
 				if(krc == NULL) return ;
 //				cpy_chars(krc->variable ,var->data,var->len);
@@ -1830,7 +1830,7 @@ ngx_int_t ngx_get_router_variable_region(ngx_str_t *router_name , ngx_str_t *var
 		key_region_confs_detail_t *krc_dt;
 		for(i=0;i<loc_cnfs.count;i++){
 			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
-					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
+					!ngx_strncmp(loc_cnfs.loc_confs[i]->router_name.data, router_name->data, router_name->len) ){
 				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
 				for( i = 0; i < krc->count_variables ; i++){
 					krc_dt = &krc->variables[i];
@@ -1853,7 +1853,7 @@ ngx_buf_t *ngx_list_router_var(ngx_pool_t *pool, ngx_str_t *router_name )
 			key_region_confs_t *krc;
 			for(i=0;i<loc_cnfs.count;i++){
 				if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
-						!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
+						!ngx_strncmp(loc_cnfs.loc_confs[i]->router_name.data, router_name->data, router_name->len) ){
 					krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
 					for ( j = 0 ; j < krc->count_variables ; j++) {
 						buf->last = ngx_sprintf(buf->last, "%ui\t%s\n", j,&krc->variables[j].variable);
@@ -4503,7 +4503,7 @@ ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc,ng
 		ngx_uint_t i;
 		for(i=0;i<loc_cnfs.count;i++){
 			if ( router_name->len >0 && loc_cnfs.loc_confs[i]->router_name.len == router_name->len &&
-					!ngx_strncmp(&loc_cnfs.loc_confs[i]->router_name, router_name, router_name->len) ){
+					!ngx_strncmp(loc_cnfs.loc_confs[i]->router_name.data, router_name->data, router_name->len) ){
 				krc = get_key_region_confs(loc_cnfs.loc_confs[i]);
 			}
 		}
@@ -6153,7 +6153,7 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
             return NGX_ERROR;
         }
     }
-
+/*
     if(opeers_shm) {
     	for (i = peers->maxindex + 1; i < peers->maxsize; i++) {
     		opeer_shm = &opeers_shm->peers[i];
@@ -6164,7 +6164,7 @@ ngx_http_upstream_check_init_shm_zone(ngx_shm_zone_t *shm_zone, void *data)
     		peer_shm->weight = opeer_shm->weight;
     	}
     }
-
+*/
     peers->peers_shm = peers_shm;
     shm_zone->data = peers_shm;
 
@@ -6338,7 +6338,7 @@ ngx_http_upstream_check_add_shm_peer(ngx_uint_t index, ngx_int_t rg, ngx_int_t w
 	ngx_http_upstream_check_peers_t		*peers;
 	ngx_http_upstream_check_peers_shm_t *peers_shm;
 	ngx_http_upstream_check_peer_shm_t  *peer_shm;
-	ngx_int_t org, owt, odw, ofdw;
+//	ngx_int_t org, owt, odw, ofdw;
 //ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+c+++++++++++++++++++++ %d", ngx_pid);
 	peers = ngx_ucmcf->peers;
 
@@ -6369,19 +6369,20 @@ ngx_http_upstream_check_add_shm_peer(ngx_uint_t index, ngx_int_t rg, ngx_int_t w
 		if(peer[index].peer_mem_addr != NULL) {
 			peer_shm->server_name = ngx_str_2_hash( &peer[index].peer_mem_addr->server ) ;
 		}
-//		peers_shm->number++;
-		owt = peer_shm->weight;
-		org = peer_shm->region;
-		odw = peer_shm->down;
-		ofdw = peer_shm->force_down;
+//		owt = peer_shm->weight;
+//		org = peer_shm->region;
+//		odw = peer_shm->down;
+//		ofdw = peer_shm->force_down;
 //ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+c4+++++++++++++++++++++ %d", ngx_pid);
 		ngx_http_upstream_check_init_shm_peer(peer_shm, NULL,
 				0, NULL, &peer[index]);
 //ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "+c5+++++++++++++++++++++ %d", ngx_pid);
-		peer_shm->weight = (wt >= 0)? wt : owt;
-		peer_shm->region = (rg >= 0)? rg : org;
-		peer_shm->down = (rg >= 0)? peer_shm->down : (ngx_atomic_t)odw; //使用rg做判断表示是从shm恢复原值
-		peer_shm->force_down = (rg >= 0)? peer_shm->force_down : (ngx_atomic_t)ofdw; //使用rg做判断表示是从shm恢复原值
+//		peer_shm->weight = (wt >= 0)? wt : owt;
+//		peer_shm->region = (rg >= 0)? rg : org;
+//		peer_shm->down = (rg >= 0)? peer_shm->down : (ngx_atomic_t)odw; //使用rg做判断表示是从shm恢复原值
+//		peer_shm->force_down = (rg >= 0)? peer_shm->force_down : (ngx_atomic_t)ofdw; //使用rg做判断表示是从shm恢复原值
+		peer_shm->weight = wt;
+		peer_shm->region = rg;
 	tail:
 		ngx_shmtx_unlock(&peer[0].shm->mutex);
 		//

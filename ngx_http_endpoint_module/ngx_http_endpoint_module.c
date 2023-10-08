@@ -194,7 +194,7 @@ typedef struct {
 	waf_items		wfs; //waf的各项, 指令/waf/reload/[name]/ipv4 ，kill后的重加载
 	waf_onff			ws; //waf的开关
 	waf_modes		wfms; //waf_mode的重载 /waf/reloadmode/!STD
-	dyn_up_srvs		dus; //动态添加 /[upstream]/[server]/[region]/[weight]/[check_down]/[force_down]
+	dyn_up_srvs		dus; //动态添加 /add/[upstream]/[server]/[region]/[weight]/[check_down]/[force_down]
 	ngx_atomic_t		debug_log; //是否输出调试日志
 } ngx_endpoint_shm_t;
 
@@ -1260,64 +1260,65 @@ static ngx_str_t* get_dyn_up_srv(ngx_str_t *s, ngx_str_t *up, ngx_str_t *sr)
 	return s;
 }
 
-//static void update_dyn_up_srv_arg(ngx_str_t *up, ngx_str_t *sr, ngx_str_t *ar, ngx_int_t pos)
-//{
-//	ngx_str_t s, ts;
-//	size_t ct;
-//	get_dyn_up_srv(&s, up, sr);
-//	if (s.len > 0) {
-//		ct =
-//		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', pos, &ts);
-//
-//	}
-//}
+static void update_dyn_up_srv_arg(ngx_str_t *up, ngx_str_t *sr, ngx_str_t *ar, ngx_int_t pos)
+{
+	ngx_str_t s;
+	get_dyn_up_srv(&s, up, sr);
+	if (s.len > 0) {
+		ngx_str_replace_pos(s.data, '/', pos, ar->data, ar->len);
+	}
+}
 
 static void update_dyn_up_srv_wt(ngx_str_t *up, ngx_str_t *sr, ngx_int_t w)
 {
-	ngx_str_t s, srg, swt;
-	get_dyn_up_srv(&s, up, sr);
-	if( s.len > 0) {
-		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 3, &srg);
-		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 4, &swt);
-		ngx_memzero(swt.data, swt.len);
-		ngx_int_to_str2(swt.data, w);
-	}
+	ngx_str_t s;
+	s.data = ngx_int_to_str(ngx_cycle->pool, w);
+	s.len = ngx_num_bit_count(w);
+	update_dyn_up_srv_arg(up, sr, &s, 4);
+	ngx_pfree(ngx_cycle->pool, s.data);
+//	ngx_str_t s, srg, swt;
+//	get_dyn_up_srv(&s, up, sr);
+//	if( s.len > 0) {
+//		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 3, &srg);
+//		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 4, &swt);
+//		ngx_memzero(swt.data, swt.len);
+//		ngx_int_to_str2(swt.data, w);
+//	}
 }
 
 static void update_dyn_up_srv_rg(ngx_str_t *up, ngx_str_t *sr, ngx_int_t r)
 {
-	ngx_str_t s, srg, swt;
-	ngx_int_t wt;
-	u_char *ds;
-	get_dyn_up_srv(&s, up, sr);
-	if( s.len > 0) {
-		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 3, &srg);
-		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 4, &swt);
-		wt = ngx_str_to_int(swt.data, swt.len);
-		ngx_memzero(srg.data, srg.len+swt.len+1);
-		ds = srg.data;
-		ngx_int_to_str2(ds, r);
-		ds += ngx_num_bit_count(r);
-		ds = ngx_strcat(ds, (u_char*)"/", 1);
-		ngx_int_to_str2(ds, wt);
-	}
+	ngx_str_t s;
+	s.data = ngx_int_to_str(ngx_cycle->pool, r);
+	s.len = ngx_num_bit_count(r);
+	update_dyn_up_srv_arg(up, sr, &s, 3);
+	ngx_pfree(ngx_cycle->pool, s.data);
+//	ngx_str_t s, srg, swt;
+//	ngx_int_t wt;
+//	u_char *ds;
+//	get_dyn_up_srv(&s, up, sr);
+//	if( s.len > 0) {
+//		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 3, &srg);
+//		ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 4, &swt);
+//		wt = ngx_str_to_int(swt.data, swt.len);
+//		ngx_memzero(srg.data, srg.len+swt.len+1);
+//		ds = srg.data;
+//		ngx_int_to_str2(ds, r);
+//		ds += ngx_num_bit_count(r);
+//		ds = ngx_strcat(ds, (u_char*)"/", 1);
+//		ngx_int_to_str2(ds, wt);
+//	}
 }
 
-//static void update_dyn_up_srv_dw(ngx_str_t *up, ngx_str_t *sr, ngx_int_t a)
-//{
-//	ngx_str_t s, srg, swt;
-//	ngx_int_t wt;
-//	u_char *ds;
-//	get_dyn_up_srv(&s, up, sr);
-//}
-//
-//static void update_dyn_up_srv_fdw(ngx_str_t *up, ngx_str_t *sr, ngx_int_t a)
-//{
-//	ngx_str_t s, srg, swt;
-//	ngx_int_t wt;
-//	u_char *ds;
-//	get_dyn_up_srv(&s, up, sr);
-//}
+void update_dyn_up_srv_dw(ngx_str_t *up, ngx_str_t *sr, ngx_str_t *ar)
+{
+	update_dyn_up_srv_arg(up, sr, ar, 5); // check_down
+}
+
+void update_dyn_up_srv_fdw(ngx_str_t *up, ngx_str_t *sr, ngx_str_t *ar)
+{
+	update_dyn_up_srv_arg(up, sr, ar, 6); //force_down
+}
 
 static ngx_int_t up_srv_add_msg_handler(void *msg, ngx_str_t *emsg)
 {
@@ -1341,11 +1342,11 @@ static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s)
 	if ( (idx = add_up_srv(&up, &sv, &swt, &srg, -1)) >= 0 ) {
 		ngx_channel_msg *msg1;
 		size_t 	buf_sz = 0;
-//		u_char	*ch;
+		u_char	*ch;
 		//shm已经被0号进程设置，这里主要是加入定时检测
 		rg = ngx_atoi(srg.data,srg.len); //region
 		wt = ngx_atoi(swt.data,swt.len); //weight
-		ngx_http_upstream_check_add_shm_peer(idx, rg, wt);
+		ngx_http_upstream_check_add_shm_peer(idx, rg, wt, 0, 0);
 		//
 		buf_sz = ngx_get_msg(&msg1,ngx_cycle->pool,s->data,s->len,up_srv_add_msg_handler);
 		//广播到所有其它进程
@@ -1353,13 +1354,15 @@ static ngx_int_t _up_srv_main_add_msg_handler(ngx_str_t *s)
 		ngx_broadcast_processes(msg1,buf_sz,ngx_cycle->log, -1);
 		ngx_pfree(ngx_cycle->pool, msg1);
 
-//		ch =
-		ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->dus.up_srvs,
+		ch = ngx_http_endpoint_item_shm_process_directive((u_char*)shm_process->dus.up_srvs,
 			&shm_process->dus.count,
 			max_dyn_up_srv,
 			max_dyn_up_srv_len,
 			s);
-//		*ch = '/';
+		*ch++ = '/';
+		*ch++ = '0'; //check_down
+		*ch++ = '/';
+		*ch = '0'; //force_down
 //		ch++;
 //		*((ngx_int_t*)(ch)) = idx; //在shm里的占位
 	}
@@ -1768,8 +1771,8 @@ ngx_http_endpoint_init_process(ngx_cycle_t *cycle)
 			ngx_http_endpoint_reslove_dn(cycle->pool,&s);
 		}
 		//处理动态添加的 upstream中的server
-		ngx_str_t up, sv, swt, srg; //, sidx;
-		ngx_int_t idx, rg, wt;
+		ngx_str_t up, sv, swt, srg, scdw, sfdw; //, sidx;
+		ngx_int_t idx, rg, wt, cdw, fdw;
 		ngx_shmtx_lock(&shm_process->dus.mutex);
 		for( i = 0 ; i < shm_process->dus.count ; i++) {
 			s.data = shm_process->dus.up_srvs[i];
@@ -1780,7 +1783,11 @@ ngx_http_endpoint_init_process(ngx_cycle_t *cycle)
 				if(shm_process->dus.loaded == 0) {
 					rg = ngx_atoi(srg.data,srg.len); //region
 					wt = ngx_atoi(swt.data,swt.len); //weight
-					ngx_http_upstream_check_add_shm_peer(idx, rg, wt);
+					ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 5, &scdw);
+					ngx_str_sch_idx_trimtoken(s.data, s.len, '/', 6, &sfdw);
+					cdw = ngx_str_to_int(scdw.data, scdw.len);
+					fdw = ngx_str_to_int(sfdw.data, sfdw.len);
+					ngx_http_upstream_check_add_shm_peer(idx, rg, wt, cdw, fdw);
 				} else {
 					ngx_http_upstream_check_add_timers((ngx_cycle_t*)ngx_cycle, idx, idx);
 				}

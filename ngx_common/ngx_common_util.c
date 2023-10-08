@@ -142,6 +142,35 @@ u_char *ngx_str_sch_next_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t 
     return c_ret;
 }
 
+//idx is token index
+void ngx_str_replace_pos(u_char *s , u_char c , ngx_int_t idx, u_char *st, size_t len)
+{
+	ngx_int_t count, ln;
+	ngx_str_t tk, tk1;
+	ngx_uint_t desp, sorp;
+	ln = strlen((char*)s);
+	count = ngx_str_find_element_count(s, ln, c);
+	if (idx < count) {
+		ngx_str_sch_idx_trimtoken(s, ln, c, idx, &tk);
+		if (tk.len > 0) {
+			desp = (tk.data - s)/sizeof(u_char) + len;
+			if (idx < count - 1) {
+				ngx_str_sch_idx_trimtoken(tk.data, ln - desp + 1, c, 1, &tk1);
+				sorp = (tk1.data - s)/sizeof(u_char) - 1; // -1 is c
+				ngx_memzero(tk.data, tk.len);
+				ngx_array_mem_move(s, desp, sorp, sizeof(u_char), ln, NULL);
+				count = (sorp - desp)/sizeof(u_char);
+				if( count > 0 ) {
+					ngx_memzero(s + ln - count, count);
+				}
+			} else {
+				ngx_memzero(tk.data, tk.len);
+			}
+			ngx_memcpy(tk.data, st, len);
+		}
+	}
+}
+
 //阶加位置从1开始
 void ngx_reverse_termial(ngx_uint_t *c , ngx_uint_t *f, ngx_uint_t n)
 {
@@ -1144,22 +1173,22 @@ ngx_array_remove_by_item(ngx_array_t *a, void *item)
 void
 ngx_array_mem_move(void *ar, ngx_uint_t desidx, ngx_uint_t soridx, size_t sz, size_t len, ngx_array_remove_item_ptr itemcb )
 {
-	if( desidx < soridx) {
+	ngx_uint_t i, l;
+	l = len - soridx;
+	if( desidx != soridx) {
 		void *des, *sor, *temp;
-		ngx_uint_t i;
 		des = (void*)((uintptr_t)ar + desidx * sz);
 		sor = (void*)((uintptr_t)ar + soridx * sz);
-		len -= soridx;
-		temp = ngx_palloc(ngx_cycle->pool, sz * len);
-		ngx_memcpy(temp, sor, sz * len);
-		ngx_memcpy(des, temp, sz * len);
+		temp = ngx_palloc(ngx_cycle->pool, sz * l);
+		ngx_memcpy(temp, sor, sz * l);
+		ngx_memcpy(des, temp, sz * l);
 //		ngx_memcpy(des, sor, sz * len);
 		ngx_pfree(ngx_cycle->pool, temp);
 		//
-		if( itemcb != NULL) {
-			for( i = desidx; i < len + desidx; i++ ) {
-				itemcb(  (void*)((uintptr_t)ar + i * sz), i );
-			}
+	}
+	if( itemcb != NULL) {
+		for( i = desidx; i < l + desidx; i++ ) {
+			itemcb(  (void*)((uintptr_t)ar + i * sz), i );
 		}
 	}
 }

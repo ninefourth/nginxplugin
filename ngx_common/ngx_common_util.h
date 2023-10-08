@@ -73,6 +73,9 @@ u_char *ngx_str_sch_next_trimtoken_full(ngx_str_t *s ,ngx_uint_t sz, ngx_uint_t 
 ngx_int_t ngx_str_sch_idx_trimtoken(u_char *s , size_t len, u_char c , ngx_int_t idx, ngx_str_t *token);
 //得到指定字符左右两边的字符串
 ngx_int_t ngx_str_sch_last_trimtoken(u_char *s , size_t len, u_char c , ngx_str_t *left , ngx_str_t *right);
+//将指定token的索引位的字符串替换为其它字符串
+void ngx_str_replace_pos(u_char *s , u_char c , ngx_int_t idx, u_char *st, size_t len);
+
 //查找begin之后指定字符的索引位
 ngx_int_t ngx_str_index_of(u_char *s , size_t len, u_char c ,ngx_uint_t begin);
 //字符串转数字
@@ -143,5 +146,6 @@ void ngx_array_remove_by_item(ngx_array_t *a, void *item);
 void ngx_array_mem_move(void *ar, ngx_uint_t desidx, ngx_uint_t soridx, size_t sz, size_t len, ngx_array_remove_item_ptr itemcb );
 //直接数组中内存拷贝，不需要中间变量。将数组ar中指定索引位置soridx之后的元素移动到指定索引位置desidx后，soridx必须大于desidx; sz指一个元素的大小, len是数组的元素个数
 void ngx_array_direct_mem_move(void *ar, ngx_uint_t desidx, ngx_uint_t soridx, size_t sz, size_t len, ngx_array_remove_item_ptr itemcb );
+
 void ngx_pool_create(ngx_log_t *log);
 

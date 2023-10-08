@@ -2557,6 +2557,7 @@ ngx_http_upstream_get_v_total_weight(void *fstp)
 void ngx_http_upstream_check_force_down_peer(void *p, ngx_uint_t dw)
 {
     ngx_http_upstream_check_peer_t  *peer;
+    ngx_str_t	d;
 
     peer = ngx_http_upstream_check_get_peer_by_peer(p);
 
@@ -2565,7 +2566,9 @@ void ngx_http_upstream_check_force_down_peer(void *p, ngx_uint_t dw)
     }
 
     peer->shm->force_down=dw;
-
+    d.len = 1;
+    d.data = (dw == 0)? (u_char*)"0" : (u_char*)"1";
+    update_dyn_up_srv_fdw(peer->upstream_name, &peer->peer_mem_addr->server, &d);
     if (dw == 0) {
     	peer->shm->rise_count = peer->conf->rise_count;
     	peer->shm->down = 1;
@@ -4260,11 +4263,15 @@ ngx_http_upstream_check_status_update(ngx_http_upstream_check_peer_t *peer,
 
     ucscf = peer->conf;
 
+    ngx_str_t d;
+    d.len = 1;
     if (result) {
         peer->shm->rise_count++;
         peer->shm->fall_count = 0;
         if (peer->shm->down && peer->shm->rise_count >= ucscf->rise_count) {
             peer->shm->down = 0;
+            d.data = (u_char*)"0";
+            update_dyn_up_srv_dw(peer->upstream_name, &peer->peer_mem_addr->server, &d);
             ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                           "enable check peer: %V ; enable peer :%V",
                           &peer->check_peer_addr->name , &peer->peer_addr->name);
@@ -4274,6 +4281,8 @@ ngx_http_upstream_check_status_update(ngx_http_upstream_check_peer_t *peer,
         peer->shm->fall_count++;
         if (!peer->shm->down && peer->shm->fall_count >= ucscf->fall_count) {
             peer->shm->down = 1;
+            d.data = (u_char*)"1";
+            update_dyn_up_srv_dw(peer->upstream_name, &peer->peer_mem_addr->server, &d);
             ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0,
                           "disable check peer: %V ; disable peer: %V",
                           &peer->check_peer_addr->name, &peer->peer_addr->name);
@@ -6332,7 +6341,7 @@ ngx_http_upstream_check_init_shm_peer(ngx_http_upstream_check_peer_shm_t *psh,
 }
 
 void
-ngx_http_upstream_check_add_shm_peer(ngx_uint_t index, ngx_int_t rg, ngx_int_t wt)
+ngx_http_upstream_check_add_shm_peer(ngx_uint_t index, ngx_int_t rg, ngx_int_t wt, ngx_int_t cd, ngx_int_t fd)
 {
 	ngx_http_upstream_check_peer_t      *peer;
 	ngx_http_upstream_check_peers_t		*peers;
@@ -6383,6 +6392,8 @@ ngx_http_upstream_check_add_shm_peer(ngx_uint_t index, ngx_int_t rg, ngx_int_t w
 //		peer_shm->force_down = (rg >= 0)? peer_shm->force_down : (ngx_atomic_t)ofdw; //使用rg做判断表示是从shm恢复原值
 		peer_shm->weight = wt;
 		peer_shm->region = rg;
+		peer_shm->down = cd;
+		peer_shm->force_down = fd;
 	tail:
 		ngx_shmtx_unlock(&peer[0].shm->mutex);
 		//

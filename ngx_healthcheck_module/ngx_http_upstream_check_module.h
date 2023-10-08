@@ -50,7 +50,7 @@ ngx_uint_t ngx_router_key_get_region(ngx_str_t *router_name , ngx_str_t *desc,ng
 ngx_buf_t *ngx_list_router_var(ngx_pool_t *pool, ngx_str_t *router_name );
 
 ngx_int_t ngx_http_upstream_check_add_check_peer(ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr, ngx_int_t idx);
-void ngx_http_upstream_check_add_shm_peer(ngx_uint_t index, ngx_int_t rg, ngx_int_t wt);
+void ngx_http_upstream_check_add_shm_peer(ngx_uint_t index, ngx_int_t rg, ngx_int_t wt, ngx_int_t cd, ngx_int_t fd);
 //ngx_int_t ngx_http_upstream_check_remove_check_peer(ngx_http_upstream_srv_conf_t *us, ngx_http_upstream_rr_peer_t *peer_mem_addr);
 void ngx_http_upstream_check_remove_shm_peer(ngx_uint_t index);
 //void ngx_http_upstream_check_add_peers_timers(ngx_uint_t index);
